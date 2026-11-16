@@ -10,6 +10,8 @@ StreamBridgeProcessor::StreamBridgeProcessor()
     gainParam    = parameters.getRawParameterValue ("gain");
     bufferParam  = parameters.getRawParameterValue ("bufferMs");
 
+    bridge.onReconnectNeeded = [this] { triggerAsyncUpdate(); };
+
     // Open the device a moment later, so a saved device from setStateInformation()
     // is used instead of opening a default one first.
     triggerAsyncUpdate();
@@ -17,6 +19,7 @@ StreamBridgeProcessor::StreamBridgeProcessor()
 
 StreamBridgeProcessor::~StreamBridgeProcessor()
 {
+    bridge.onReconnectNeeded = nullptr;
     cancelPendingUpdate();
     downloader.cancel();
     bridge.closeDevice();
@@ -37,6 +40,11 @@ void StreamBridgeProcessor::prepareToPlay (double sampleRate, int samplesPerBloc
 {
     bridge.setHostSampleRate (sampleRate);
     bridge.setHostBlockSize (samplesPerBlock);
+
+    // The device may have been opened before the host said its rate. If so, open it again
+    // at the host's rate when the device allows that, so the copy is not resampled.
+    if (bridge.isRunning() && sampleRate != bridge.getDeviceSampleRate())
+        triggerAsyncUpdate();
 }
 
 bool StreamBridgeProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
@@ -155,7 +163,7 @@ juce::String StreamBridgeProcessor::getStatusText() const
     if (selectedDevice.isEmpty())
         return "No virtual cable found. Pick an output above.";
 
-    return "Not running";
+    return "Waiting for " + selectedDevice + " to come back...";
 }
 
 juce::File StreamBridgeProcessor::getDownloadFolder() const
@@ -194,6 +202,8 @@ juce::String StreamBridgeProcessor::findVirtualCable()
     return {};
 }
 
+// Opens the device when it is not playing yet, after it was lost, or when it could run at
+// the host's sample rate. Does nothing while everything already works.
 void StreamBridgeProcessor::handleAsyncUpdate()
 {
     auto deviceName = getSelectedOutputDevice();
@@ -201,7 +211,10 @@ void StreamBridgeProcessor::handleAsyncUpdate()
     if (deviceName.isEmpty())
         deviceName = findVirtualCable();
 
-    if (deviceName.isEmpty() || deviceName == bridge.getOpenDeviceName())
+    if (deviceName.isEmpty())
+        return;
+
+    if (deviceName == bridge.getOpenDeviceName() && bridge.isRunning() && ! bridge.couldUseHostSampleRate())
         return;
 
     selectOutputDevice (deviceName);

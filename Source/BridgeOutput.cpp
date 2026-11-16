@@ -3,11 +3,17 @@
 BridgeOutput::BridgeOutput()
     : deviceType (juce::AudioIODeviceType::createAudioIODeviceType_WASAPI (juce::WASAPIDeviceMode::shared))
 {
+    if (deviceType != nullptr)
+        deviceType->addListener (this);
 }
 
 BridgeOutput::~BridgeOutput()
 {
+    onReconnectNeeded = nullptr;
     closeDevice();
+
+    if (deviceType != nullptr)
+        deviceType->removeListener (this);
 }
 
 juce::StringArray BridgeOutput::getOutputDeviceNames()
@@ -64,6 +70,7 @@ void BridgeOutput::closeDevice()
 {
     if (device != nullptr)
     {
+        const juce::ScopedValueSetter<bool> purpose (closingOnPurpose, true);
         device->stop();
         device->close();
         device.reset();
@@ -71,6 +78,14 @@ void BridgeOutput::closeDevice()
 
     running.store (false);
     openDeviceName = {};
+}
+
+bool BridgeOutput::couldUseHostSampleRate() const
+{
+    const auto hostRate = hostSampleRate.load();
+
+    return device != nullptr && running.load() && hostRate != deviceSampleRate.load()
+        && device->getAvailableSampleRates().contains (hostRate);
 }
 
 void BridgeOutput::push (const juce::AudioBuffer<float>& buffer)
@@ -299,16 +314,30 @@ void BridgeOutput::audioDeviceAboutToStart (juce::AudioIODevice* startingDevice)
         lastError = {};
     }
 
+    startTime = juce::Time::getMillisecondCounter();
     running.store (true);
 }
 
 void BridgeOutput::audioDeviceStopped()
 {
     running.store (false);
+
+    // Windows stopped the device. Ask to open it again, unless it had only just started,
+    // so a device that keeps failing cannot cause an endless loop. A later device list
+    // change still gets another try.
+    if (! closingOnPurpose && juce::Time::getMillisecondCounter() - startTime > 1000 && onReconnectNeeded != nullptr)
+        onReconnectNeeded();
 }
 
 void BridgeOutput::audioDeviceError (const juce::String& errorMessage)
 {
     const juce::ScopedLock sl (errorLock);
     lastError = errorMessage;
+}
+
+void BridgeOutput::audioDeviceListChanged()
+{
+    // A device was added or removed. If ours was missing, it may be back now.
+    if (! running.load() && onReconnectNeeded != nullptr)
+        onReconnectNeeded();
 }

@@ -13,7 +13,8 @@
 // own thread pulls them out and resamples them. The two devices run on different
 // clocks, so the resampling speed is nudged up or down a tiny bit to keep the FIFO
 // near a fixed fill level.
-class BridgeOutput : private juce::AudioIODeviceCallback
+class BridgeOutput : private juce::AudioIODeviceCallback,
+                     private juce::AudioIODeviceType::Listener
 {
 public:
     BridgeOutput();
@@ -25,6 +26,12 @@ public:
     void closeDevice();
     juce::String getOpenDeviceName() const     { return openDeviceName; }
     double getDeviceSampleRate() const         { return deviceSampleRate.load(); }
+    bool couldUseHostSampleRate() const;       // running, but reopening would avoid resampling
+
+    // Called on the message thread when the device stopped by itself (for example after
+    // Windows sleep or a driver reset) or the list of devices changed while not running,
+    // so the owner can open the device again. Costs nothing while everything works.
+    std::function<void()> onReconnectNeeded;
 
     // Host audio thread only.
     void setHostSampleRate (double newRate)    { hostSampleRate.store (newRate); }
@@ -60,6 +67,7 @@ private:
     void audioDeviceAboutToStart (juce::AudioIODevice* device) override;
     void audioDeviceStopped() override;
     void audioDeviceError (const juce::String& errorMessage) override;
+    void audioDeviceListChanged() override;
 
     static constexpr int fifoSize = 1 << 18;    // about 5 s at 48 kHz, so large buffer settings fit
     static constexpr double maxSpeedCorrection = 0.002;
@@ -68,6 +76,8 @@ private:
     std::unique_ptr<juce::AudioIODeviceType> deviceType;
     std::unique_ptr<juce::AudioIODevice> device;
     juce::String openDeviceName;
+    bool closingOnPurpose = false;      // message thread only
+    juce::uint32 startTime = 0;         // message thread only
 
     juce::AbstractFifo fifo { fifoSize };
     juce::AudioBuffer<float> fifoBuffer { 2, fifoSize };
