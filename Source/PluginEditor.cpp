@@ -165,14 +165,17 @@ void StreamBridgeEditor::updateTuningDisplay()
                           : *lowest >= 1.0 ? juce::Colours::orange
                                            : juce::Colours::red;
 
-        marginLabel.setText ("Safety margin (last 2 s): " + juce::String (*lowest, 1) + " ms", juce::dontSendNotification);
+        marginLabel.setText ("Safety margin (last 2 seconds): " + juce::String (*lowest, 1) + " ms", juce::dontSendNotification);
         marginLabel.setColour (juce::Label::textColourId, colour);
     }
 
     juce::String advice;
 
     if (const auto sinceDropout = bridge.getSecondsSinceLastDropout())
-        advice << "Dropouts: " << bridge.getDropoutCount() << ", last one " << juce::roundToInt (*sinceDropout) << " s ago.  ";
+    {
+        const auto seconds = juce::roundToInt (*sinceDropout);
+        advice << "Dropouts: " << bridge.getDropoutCount() << ", last one " << seconds << (seconds == 1 ? " second" : " seconds") << " ago.  ";
+    }
 
     // Suggest the buffer that would have left 2 ms to spare at the worst moment so far.
     if (const auto sessionLowest = bridge.getSessionLowestMarginMs())
