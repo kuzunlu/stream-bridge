@@ -217,6 +217,10 @@ There are no unit tests. Verify with:
   tests the artifact. Merge to `main` only when the owner says it works. Ask before pushing
   to a new branch or to `main`.
 - End commit messages with the `Co-Authored-By` line given in the session's instructions.
+- Finish with one clear "what to do now" step, in numbered clicks. Long option lists or
+  several parallel next steps confuse the owner ("I didn't understand what to do now").
+- The owner can't share CI logs easily: ask them to click the red step and paste the lines
+  with `error` (there is no log-download button on the run summary page).
 
 ## Decisions already made (don't re-propose)
 
@@ -231,6 +235,57 @@ work-folder cleanup, prompt cancel, drag-to-Ableton, Show in folder, conversion 
 auto-update-and-retry, FLAC, MP3 192 default, installer, Get VB-Cable button, README,
 version in the window, dropping `juce_audio_utils`, dead-code removal, the "Delay of the
 copy now" readout, WASAPI low-latency mode with fallback.
+
+## Where we left off (2026-11-17)
+
+Branch `small-ffmpeg` (not merged into `main`; no release tag pushed). Commits on it:
+
+| Commit | What | CI |
+|---|---|---|
+| `e772708` | Small ffmpeg bundled in the plugin | built |
+| `8331034` | "seconds" instead of "s" | built |
+| `7c75957` | Auto-reconnect, reopen at host rate | built |
+| `0fa99f4` | The big batch (warnings, health line, downloader, installer, version…) | failed: CMake needed VERSION on the test apps |
+| `9f86460` | CLAUDE.md + README | same failure |
+| `c19923e` | VERSION on the test apps | **green**, installer artifact produced |
+| `e2c5355` | WASAPI low-latency mode + "Delay of the copy now" readout | **not yet checked** |
+
+Next steps, in order:
+
+1. Check CI for `e2c5355` (or later). If red, get the error lines and fix.
+2. The owner installs the installer artifact and tests: version text, "Listen" warning
+   disappearing after Refresh, "Stream OK", tooltips, downloader (MP3 192, FLAC, progress,
+   drag into Ableton, Show in folder), Discord viewers hear the DAW.
+3. The owner reads Details → "Delay of the copy now: … (… plugin + … Windows, low-latency
+   / normal mode)" and reports the numbers. This shows how much of the ~200 ms guitar lag
+   is the plugin. Whether VB-Cable supports low-latency mode is unknown until then.
+4. When the owner says it works: merge `small-ffmpeg` into `main`. A release tag
+   (e.g. `v0.3.0`) only if the owner asks.
+
+Findings from 2026-11-17:
+
+- "Listen to this device" on CABLE Output is now **off** on the owner's PC (it was on and
+  caused the doubled, ~800 ms late guitar).
+- The owner uses **Discord screen share only** (entire screen), no Discord microphone.
+  Backing tracks play in a **browser**; viewers hear the guitar ~200 ms late (test "B":
+  still late with "Listen" off). Ableton's latency and the plugin's buffer setting were
+  both small. Recommended fix given: play the track inside Ableton.
+- Asked "isn't there another driver?": no. Discord only hears audio that passes through
+  Windows' shared audio engine; exclusive mode / kernel streaming bypass it, ASIO bridges
+  (VB-Audio, Voicemeeter) add buffering, other virtual cables don't matter because Discord
+  captures the process audio before the cable, and Focusrite Loopback is a microphone
+  (separate, unsynced path in Discord).
+- Open question, not answered (the owner interrupted it): keep "MP3 320 kbps (larger
+  file)" in the format menu, remove it, or remove 320 and 256. The owner asked why 320
+  exists if YouTube is only ~128–160 kbps; explained it is the most faithful MP3 copy but
+  practically the same as 192. Ask again (yes/no style) before changing anything.
+- This PC (the one used on 2026-11-16/17) has Visual Studio 2022 Professional **without**
+  the C++ workload, so it cannot build the plugin; MSYS2 is installed (UCRT64 gcc), which
+  builds ffmpeg and allows a syntax-only check of the sources:
+  `g++ -std=c++17 -fsyntax-only -w -U__MINGW32__ -U__MINGW64__ -I libs/JUCE/modules
+  -DJUCE_GLOBAL_MODULE_SETTINGS_INCLUDED=1 -DJUCE_STANDALONE_APPLICATION=1 <file>`
+  and look only at errors in `Source/` or `tests/` (JUCE itself rejects MinGW; this only
+  catches mistakes in our code). It caught a real one once (`juce::File = {}` ambiguous).
 
 ## Licensing
 
