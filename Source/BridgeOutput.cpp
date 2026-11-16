@@ -118,11 +118,16 @@ void BridgeOutput::audioDeviceIOCallbackWithContext (const float* const*,
         if (outputChannelData[ch] != nullptr)
             juce::FloatVectorOperations::clear (outputChannelData[ch], numSamples);
 
-    const auto baseRatio = hostSampleRate.load() / deviceSampleRate.load();
-    // The host delivers audio in blocks, so the FIFO must hold more than one host block.
-    const auto target = juce::jmax (hostSampleRate.load() * targetLatencySeconds,
-                                    2.0 * numSamples * baseRatio,
-                                    1.5 * hostBlockSize.load() + numSamples * baseRatio);
+    const auto hostRate = hostSampleRate.load();
+    const auto baseRatio = hostRate / deviceSampleRate.load();
+
+    // The smallest buffer that can work: one block of this device, one host block,
+    // and a little room for timing jitter. The user's setting can only go above it.
+    const auto minimumTarget = numSamples * baseRatio + hostBlockSize.load() + jitterMarginSamples;
+    const auto target = juce::jlimit (minimumTarget, fifoSize / 4.0, targetLatencyMs.load() * 0.001 * hostRate);
+    minimumMs.store (minimumTarget * 1000.0 / hostRate);
+    targetMs.store (target * 1000.0 / hostRate);
+
     auto ready = fifo.getNumReady();
 
     if (! enabled.load())
@@ -140,9 +145,28 @@ void BridgeOutput::audioDeviceIOCallbackWithContext (const float* const*,
 
         priming = false;
         smoothedFill = ready;
+        lastTarget = target;
 
         for (auto& interpolator : interpolators)
             interpolator.reset();
+    }
+
+    // The buffer setting was changed: go to the new amount right away, instead of
+    // drifting there over many seconds. Viewers may hear one small click.
+    if (target != lastTarget)
+    {
+        lastTarget = target;
+
+        if (ready < target)
+        {
+            priming = true;
+            return;
+        }
+
+        const auto skip = ready - (int) target;
+        fifo.finishedRead (skip);
+        ready -= skip;
+        smoothedFill = ready;
     }
 
     // Far too much audio waiting (for example after a CPU spike): jump forward.

@@ -129,6 +129,13 @@ int main (int argc, char* argv[])
     // -60 dB is the lowest volume and means silence, so the cable only gets silence.
     processor.parameters.getParameter ("gain")->setValueNotifyingHost (0.0f);
 
+    // Optional second argument: the stream buffer in ms, for example: LatencyTest.exe "Speakers (Senary Audio)" 0
+    if (argc > 2)
+    {
+        auto* buffer = processor.parameters.getParameter ("bufferMs");
+        buffer->setValueNotifyingHost (buffer->convertTo0to1 (juce::String (argv[2]).getFloatValue()));
+    }
+
     // Pass a device name to test with another output, for example: LatencyTest.exe "Speakers (Senary Audio)"
     juce::String cable = argc > 1 ? juce::String (argv[1]) : juce::String();
 

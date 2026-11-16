@@ -50,6 +50,7 @@ private:
 
     std::atomic<float>* enabledParam = nullptr;
     std::atomic<float>* gainParam = nullptr;
+    std::atomic<float>* bufferParam = nullptr;
 
     mutable juce::CriticalSection deviceLock;
     juce::String selectedDevice;

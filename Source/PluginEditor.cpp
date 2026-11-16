@@ -4,10 +4,12 @@ StreamBridgeEditor::StreamBridgeEditor (StreamBridgeProcessor& p)
     : AudioProcessorEditor (p),
       bridgeProcessor (p),
       enabledAttachment (p.parameters, "enabled", enabledButton),
-      gainAttachment (p.parameters, "gain", gainSlider)
+      gainAttachment (p.parameters, "gain", gainSlider),
+      bufferAttachment (p.parameters, "bufferMs", bufferSlider)
 {
     for (auto* c : std::initializer_list<juce::Component*> { &deviceLabel, &deviceBox, &refreshButton,
-                                                             &enabledButton, &gainLabel, &gainSlider, &statusLabel })
+                                                             &enabledButton, &gainLabel, &gainSlider,
+                                                             &bufferLabel, &bufferSlider, &statusLabel })
         addAndMakeVisible (c);
 
     deviceBox.onChange = [this]
@@ -19,6 +21,7 @@ StreamBridgeEditor::StreamBridgeEditor (StreamBridgeProcessor& p)
     refreshButton.onClick = [this] { refreshDeviceList(); };
 
     gainSlider.setTextValueSuffix (" dB");
+    bufferSlider.setTextValueSuffix (" ms");
     statusLabel.setJustificationType (juce::Justification::topLeft);
     statusLabel.setMinimumHorizontalScale (1.0f);
 
@@ -26,7 +29,7 @@ StreamBridgeEditor::StreamBridgeEditor (StreamBridgeProcessor& p)
     timerCallback();
     startTimerHz (4);
 
-    setSize (480, 170);
+    setSize (480, 210);
 }
 
 StreamBridgeEditor::~StreamBridgeEditor()
@@ -79,6 +82,11 @@ void StreamBridgeEditor::resized()
     enabledButton.setBounds (row.removeFromLeft (120));
     gainLabel.setBounds (row.removeFromLeft (60));
     gainSlider.setBounds (row);
+
+    area.removeFromTop (10);
+    row = area.removeFromTop (28);
+    bufferLabel.setBounds (row.removeFromLeft (180));
+    bufferSlider.setBounds (row);
 
     area.removeFromTop (10);
     statusLabel.setBounds (area);

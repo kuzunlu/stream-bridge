@@ -8,6 +8,7 @@ StreamBridgeProcessor::StreamBridgeProcessor()
 {
     enabledParam = parameters.getRawParameterValue ("enabled");
     gainParam    = parameters.getRawParameterValue ("gain");
+    bufferParam  = parameters.getRawParameterValue ("bufferMs");
 
     // Open the device a moment later, so a saved device from setStateInformation()
     // is used instead of opening a default one first.
@@ -25,7 +26,10 @@ juce::AudioProcessorValueTreeState::ParameterLayout StreamBridgeProcessor::creat
     return { std::make_unique<juce::AudioParameterBool> (juce::ParameterID { "enabled", 1 }, "Send Audio", true),
              std::make_unique<juce::AudioParameterFloat> (juce::ParameterID { "gain", 1 }, "Volume",
                                                           juce::NormalisableRange<float> (-60.0f, 6.0f, 0.1f), 0.0f,
-                                                          juce::AudioParameterFloatAttributes().withLabel ("dB")) };
+                                                          juce::AudioParameterFloatAttributes().withLabel ("dB")),
+             std::make_unique<juce::AudioParameterFloat> (juce::ParameterID { "bufferMs", 1 }, "Stream Buffer",
+                                                          juce::NormalisableRange<float> (0.0f, 1000.0f, 1.0f, 0.3f), 40.0f,
+                                                          juce::AudioParameterFloatAttributes().withLabel ("ms")) };
 }
 
 void StreamBridgeProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
@@ -54,6 +58,7 @@ void StreamBridgeProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
     // The host's audio passes through untouched. Only the copy is sent.
     bridge.setEnabled (enabledParam->load() > 0.5f);
     bridge.setGain (juce::Decibels::decibelsToGain (gainParam->load(), -60.0f));
+    bridge.setTargetLatencyMs (bufferParam->load());
 
     // When Ableton exports (renders offline) it runs faster than real time, so skip.
     if (! isNonRealtime())
@@ -117,7 +122,8 @@ juce::String StreamBridgeProcessor::getStatusText() const
     {
         auto text = "Playing to " + bridge.getOpenDeviceName()
                   + "  |  " + juce::String (juce::roundToInt (bridge.getDeviceSampleRate())) + " Hz"
-                  + "  |  " + juce::String (juce::roundToInt (bridge.getBufferedMs())) + " ms buffered"
+                  + "  |  buffer " + juce::String (juce::roundToInt (bridge.getTargetMs())) + " ms"
+                  + " (lowest possible " + juce::String (juce::roundToInt (bridge.getMinimumMs())) + " ms)"
                   + "  |  dropouts: " + juce::String (bridge.getDropoutCount());
 
         if (const auto error = bridge.getLastError(); error.isNotEmpty())
