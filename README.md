@@ -22,31 +22,3 @@ You need:
 2. Rescan plugins in your DAW. In Ableton: Preferences → Plug-ins → Rescan.
 3. Put **Stream Bridge** on the Master channel and pick your virtual cable as Output.
 4. In Discord, share your screen. Viewers hear the DAW.
-
-## Making a new release
-
-Push a version tag. GitHub builds the plugin and publishes the Release by itself:
-
-```
-git tag v0.1.0
-git push origin v0.1.0
-```
-
-Every normal push also builds the plugin. That build is under the **Actions** tab,
-as **Stream-Bridge-VST3** under *Artifacts*.
-
-## Build it yourself
-
-Needs Visual Studio or the free Build Tools for Visual Studio, with
-"Desktop development with C++".
-
-```
-git clone --recursive https://github.com/kuzunlu/stream-bridge.git
-cd stream-bridge
-build.bat
-```
-
-The plugin ends up in `build\StreamBridge_artefacts\Release\VST3\`.
-
-`build\LatencyTest_artefacts\Release\LatencyTest.exe` checks that the plugin adds no
-delay and measures its CPU and memory use.
