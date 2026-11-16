@@ -41,10 +41,15 @@ public:
     juce::String getSelectedOutputDevice() const;
     juce::String getStatusText() const;
 
+    // A Windows setting that makes the user hear the copy, or empty. Checked when an
+    // output is opened, and again by checkWindowsSettings().
+    void checkWindowsSettings();
+    juce::String getWarningText() const;
+
     juce::File getDownloadFolder() const;
     void setDownloadFolder (const juce::File& folder);
-    int getDownloadFormat() const;
-    void setDownloadFormat (int formatIndex);
+    AudioDownloader::Format getDownloadFormat() const;
+    void setDownloadFormat (AudioDownloader::Format format);
 
     juce::AudioProcessorValueTreeState parameters;
     BridgeOutput bridge;
@@ -62,8 +67,9 @@ private:
     mutable juce::CriticalSection deviceLock;
     juce::String selectedDevice;
     juce::String openError;
+    juce::String warningText;
     juce::File downloadFolder { juce::File::getSpecialLocation (juce::File::userMusicDirectory) };
-    int downloadFormat = 0;
+    AudioDownloader::Format downloadFormat = AudioDownloader::Format::mp3_192;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (StreamBridgeProcessor)
 };

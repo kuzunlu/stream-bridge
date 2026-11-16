@@ -1,5 +1,5 @@
 // Runs the YouTube downloader without a DAW and prints its status messages.
-// Usage: DownloadTest.exe <youtube link> <folder> [format number, 0 = MP3 320 ... 4 = WAV]
+// Usage: DownloadTest.exe <youtube link> <folder> [format number, in the menu's order: 0 = MP3 192 ... 5 = WAV]
 
 #include "../Source/AudioDownloader.h"
 
@@ -14,7 +14,7 @@ int main (int argc, char* argv[])
         return 1;
     }
 
-    const auto format = argc > 3 ? std::atoi (argv[3]) : 0;
+    const auto format = juce::jlimit (0, AudioDownloader::getFormatNames().size() - 1, argc > 3 ? std::atoi (argv[3]) : 0);
     std::printf ("Format: %s\n", AudioDownloader::getFormatNames()[format].toRawUTF8());
 
     AudioDownloader downloader;

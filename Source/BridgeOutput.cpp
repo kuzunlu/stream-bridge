@@ -95,6 +95,8 @@ void BridgeOutput::push (const juce::AudioBuffer<float>& buffer)
     if (! running.load() || ! enabled.load() || numChannels == 0)
         return;
 
+    lastPushTime.store (juce::Time::getMillisecondCounter());
+
     // If the FIFO is full, the extra samples are dropped. The output side keeps the
     // FIFO far from full, so this only happens if the output device stalls.
     const auto scope = fifo.write (buffer.getNumSamples());
@@ -111,22 +113,12 @@ void BridgeOutput::push (const juce::AudioBuffer<float>& buffer)
     }
 }
 
-double BridgeOutput::getBufferedMs() const
+void BridgeOutput::resetHealth()
 {
-    return fifo.getNumReady() * 1000.0 / hostSampleRate.load();
-}
-
-void BridgeOutput::setMonitoring (bool shouldMonitor)
-{
-    if (shouldMonitor && ! monitoring.load())
-    {
-        dropouts.store (0);
-        recentLowestMargin.store (INT_MAX);
-        sessionLowestMargin.store (INT_MAX);
-        lastDropoutTime.store (0);
-    }
-
-    monitoring.store (shouldMonitor);
+    dropouts.store (0);
+    recentLowestMargin.store (INT_MAX);
+    sessionLowestMargin.store (INT_MAX);
+    lastDropoutTime.store (0);
 }
 
 std::optional<double> BridgeOutput::takeLowestMarginMs()
@@ -182,7 +174,7 @@ void BridgeOutput::audioDeviceIOCallbackWithContext (const float* const*,
     // The smallest buffer that can work: one block of this device, one host block,
     // and a little room for timing jitter. The user's setting can only go above it.
     const auto minimumTarget = numSamples * baseRatio + hostBlockSize.load() + jitterMarginSamples;
-    const auto target = juce::jlimit (minimumTarget, fifoSize / 4.0, targetLatencyMs.load() * 0.001 * hostRate);
+    const auto target = juce::jlimit (minimumTarget, juce::jmax (minimumTarget, maxTargetSamples), targetLatencyMs.load() * 0.001 * hostRate);
     minimumMs.store (minimumTarget * 1000.0 / hostRate);
     targetMs.store (target * 1000.0 / hostRate);
 
@@ -214,7 +206,7 @@ void BridgeOutput::audioDeviceIOCallbackWithContext (const float* const*,
     if (target != lastTarget)
     {
         lastTarget = target;
-        sessionLowestMargin.store (INT_MAX);    // the old margins belonged to the old buffer size
+        resetHealth();    // the old numbers belonged to the old buffer size
 
         if (ready < target)
         {
@@ -229,7 +221,7 @@ void BridgeOutput::audioDeviceIOCallbackWithContext (const float* const*,
     }
 
     // Far too much audio waiting (for example after a CPU spike): jump forward.
-    if (ready > 4.0 * target)
+    if (ready > juce::jmin (4.0 * target, fifoSize - 4096.0))
     {
         const auto skip = ready - (int) target;
         fifo.finishedRead (skip);
@@ -244,8 +236,13 @@ void BridgeOutput::audioDeviceIOCallbackWithContext (const float* const*,
     const auto ratio = baseRatio * (1.0 + maxSpeedCorrection * fillError);
     const auto needed = (int) std::ceil (ratio * numSamples) + 4;
 
-    // Tuning mode only: how much spare audio is left after this read.
-    if (monitoring.load())
+    // Running out is a dropout only while the host is still sending. When it stops
+    // (export, audio engine off, plugin switched off) the FIFO empties as expected.
+    const auto now = juce::Time::getMillisecondCounter();
+    const auto hostIsSending = now - lastPushTime.load() < 250;
+
+    // How much spare audio is left after this read.
+    if (hostIsSending)
     {
         const auto margin = ready - needed;
 
@@ -258,10 +255,10 @@ void BridgeOutput::audioDeviceIOCallbackWithContext (const float* const*,
 
     if (needed > ready || needed > scratch.getNumSamples() || numSamples > rendered.getNumSamples())
     {
-        if (monitoring.load())
+        if (hostIsSending)
         {
             dropouts.fetch_add (1);
-            lastDropoutTime.store (juce::jmax ((juce::uint32) 1, juce::Time::getMillisecondCounter()));
+            lastDropoutTime.store (juce::jmax ((juce::uint32) 1, now));
         }
 
         priming = true;
@@ -308,6 +305,7 @@ void BridgeOutput::audioDeviceAboutToStart (juce::AudioIODevice* startingDevice)
     // Throw away any old audio left over from an earlier session.
     fifo.finishedRead (fifo.getNumReady());
     priming = true;
+    resetHealth();
 
     {
         const juce::ScopedLock sl (errorLock);

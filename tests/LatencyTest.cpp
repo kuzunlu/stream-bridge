@@ -125,7 +125,6 @@ int main (int argc, char* argv[])
 
     StreamBridgeProcessor processor;
     processor.prepareToPlay (testSampleRate, testBlockSize);
-    processor.bridge.setMonitoring (true);    // tuning mode, so dropouts are counted
 
     // -60 dB is the lowest volume and means silence, so the cable only gets silence.
     processor.parameters.getParameter ("gain")->setValueNotifyingHost (0.0f);

@@ -1,6 +1,28 @@
 cmake_minimum_required(VERSION 3.22)
 
-project(STREAM_BRIDGE VERSION 0.1.0)
+project(STREAM_BRIDGE)
+
+# The version comes from the newest git tag (like v0.3.0). A release build shows the tag,
+# other builds show how far past it they are, like v0.3.0-2-gabc1234.
+set(STREAM_BRIDGE_VERSION_TEXT "dev")
+set(STREAM_BRIDGE_VERSION_NUMBER "0.0.0")
+find_package(Git QUIET)
+
+if(GIT_FOUND)
+    execute_process(COMMAND "${GIT_EXECUTABLE}" describe --tags --match "v[0-9]*"
+                    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+                    OUTPUT_VARIABLE gitDescribe
+                    OUTPUT_STRIP_TRAILING_WHITESPACE
+                    ERROR_QUIET
+                    RESULT_VARIABLE gitDescribeResult)
+
+    if(gitDescribeResult EQUAL 0 AND gitDescribe MATCHES "^v([0-9]+[.][0-9]+[.][0-9]+)")
+        set(STREAM_BRIDGE_VERSION_TEXT "${gitDescribe}")
+        set(STREAM_BRIDGE_VERSION_NUMBER "${CMAKE_MATCH_1}")
+    endif()
+endif()
+
+message(STATUS "Stream Bridge version: ${STREAM_BRIDGE_VERSION_TEXT}")
 
 # Put the Visual C++ runtime inside the plugin, so it works on PCs without the Visual C++ Redistributable.
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
@@ -8,6 +30,7 @@ set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 add_subdirectory(libs/JUCE)
 
 juce_add_plugin(StreamBridge
+    VERSION ${STREAM_BRIDGE_VERSION_NUMBER}
     COMPANY_NAME "Kursat"
     PLUGIN_MANUFACTURER_CODE Kurs
     PLUGIN_CODE Stbr
@@ -25,17 +48,19 @@ target_sources(StreamBridge
         Source/AudioDownloader.cpp
         Source/BridgeOutput.cpp
         Source/PluginEditor.cpp
-        Source/PluginProcessor.cpp)
+        Source/PluginProcessor.cpp
+        Source/WindowsAudioCheck.cpp)
 
 target_compile_definitions(StreamBridge
     PUBLIC
         JUCE_WEB_BROWSER=0
         JUCE_USE_CURL=0
-        JUCE_VST3_CAN_REPLACE_VST2=0)
+        JUCE_VST3_CAN_REPLACE_VST2=0
+        "STREAM_BRIDGE_VERSION=\"${STREAM_BRIDGE_VERSION_TEXT}\"")
 
 target_link_libraries(StreamBridge
     PRIVATE
-        juce::juce_audio_utils
+        juce::juce_audio_devices
         juce::juce_cryptography
     PUBLIC
         juce::juce_recommended_config_flags
@@ -52,6 +77,7 @@ target_sources(LatencyTest
         Source/BridgeOutput.cpp
         Source/PluginEditor.cpp
         Source/PluginProcessor.cpp
+        Source/WindowsAudioCheck.cpp
         tests/LatencyTest.cpp)
 
 target_compile_definitions(LatencyTest
@@ -62,7 +88,8 @@ target_compile_definitions(LatencyTest
 
 target_link_libraries(LatencyTest
     PRIVATE
-        juce::juce_audio_utils
+        juce::juce_audio_devices
+        juce::juce_audio_processors
         juce::juce_cryptography
         juce::juce_recommended_config_flags
         juce::juce_recommended_warning_flags)

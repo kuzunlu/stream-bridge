@@ -1,5 +1,6 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
+#include "WindowsAudioCheck.h"
 
 StreamBridgeProcessor::StreamBridgeProcessor()
     : AudioProcessor (BusesProperties().withInput  ("Input",  juce::AudioChannelSet::stereo(), true)
@@ -32,7 +33,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout StreamBridgeProcessor::creat
                                                           juce::NormalisableRange<float> (-60.0f, 6.0f, 0.1f), 0.0f,
                                                           juce::AudioParameterFloatAttributes().withLabel ("dB")),
              std::make_unique<juce::AudioParameterFloat> (juce::ParameterID { "bufferMs", 1 }, "Stream Buffer",
-                                                          juce::NormalisableRange<float> (0.0f, 1000.0f, 1.0f, 0.3f), 40.0f,
+                                                          juce::NormalisableRange<float> (0.0f, 250.0f, 1.0f, 0.5f), 40.0f,
                                                           juce::AudioParameterFloatAttributes().withLabel ("ms")) };
 }
 
@@ -84,8 +85,7 @@ void StreamBridgeProcessor::getStateInformation (juce::MemoryBlock& destData)
     auto state = parameters.copyState();
     state.setProperty ("outputDevice", getSelectedOutputDevice(), nullptr);
     state.setProperty ("downloadFolder", getDownloadFolder().getFullPathName(), nullptr);
-    state.setProperty ("downloadFormat", getDownloadFormat(), nullptr);
-    state.setProperty ("bufferTuning", bridge.isMonitoring(), nullptr);
+    state.setProperty ("downloadFormatId", AudioDownloader::getFormatId (getDownloadFormat()), nullptr);
 
     if (const auto xml = state.createXml())
         copyXmlToBinary (*xml, destData);
@@ -108,10 +108,8 @@ void StreamBridgeProcessor::setStateInformation (const void* data, int sizeInByt
         if (const auto folder = state.getProperty ("downloadFolder").toString(); juce::File::isAbsolutePath (folder))
             downloadFolder = juce::File (folder);
 
-        downloadFormat = state.getProperty ("downloadFormat", 0);
+        downloadFormat = AudioDownloader::getFormatFromId (state.getProperty ("downloadFormatId").toString());
     }
-
-    bridge.setMonitoring (state.getProperty ("bufferTuning", false));
 
     triggerAsyncUpdate();
 }
@@ -125,8 +123,37 @@ void StreamBridgeProcessor::selectOutputDevice (const juce::String& deviceName)
 
     const auto error = bridge.openDevice (deviceName);
 
+    {
+        const juce::ScopedLock sl (deviceLock);
+        openError = error;
+    }
+
+    checkWindowsSettings();
+}
+
+void StreamBridgeProcessor::checkWindowsSettings()
+{
+    const auto device = getSelectedOutputDevice();
+    juce::String warning;
+
+    if (device.isNotEmpty())
+    {
+        if (const auto listening = WindowsAudioCheck::findListeningRecordingDevice (device); listening.isNotEmpty())
+            warning = "You hear yourself twice: Windows plays " + listening + " to your speakers. Fix: Win+R, mmsys.cpl, "
+                      "Recording, " + listening + ", Properties, Listen, untick \"Listen to this device\".";
+        else if (! WindowsAudioCheck::looksVirtual (device))
+            warning = "This looks like a real speaker or headphone output, so you will hear the copy late. "
+                      "Pick a virtual cable, like CABLE Input.";
+    }
+
     const juce::ScopedLock sl (deviceLock);
-    openError = error;
+    warningText = warning;
+}
+
+juce::String StreamBridgeProcessor::getWarningText() const
+{
+    const juce::ScopedLock sl (deviceLock);
+    return warningText;
 }
 
 juce::String StreamBridgeProcessor::getSelectedOutputDevice() const
@@ -142,12 +169,6 @@ juce::String StreamBridgeProcessor::getStatusText() const
         auto text = "Playing to " + bridge.getOpenDeviceName()
                   + "  |  " + juce::String (juce::roundToInt (bridge.getDeviceSampleRate())) + " Hz"
                   + "  |  buffer " + juce::String (juce::roundToInt (bridge.getTargetMs())) + " ms";
-
-        if (bridge.isMonitoring())
-            text << " (lowest possible " << juce::roundToInt (bridge.getMinimumMs()) << " ms)"
-                 << "  |  dropouts: " << bridge.getDropoutCount();
-        else
-            text << " (locked)";
 
         if (const auto error = bridge.getLastError(); error.isNotEmpty())
             text << "  |  " << error;
@@ -178,16 +199,16 @@ void StreamBridgeProcessor::setDownloadFolder (const juce::File& folder)
     downloadFolder = folder;
 }
 
-int StreamBridgeProcessor::getDownloadFormat() const
+AudioDownloader::Format StreamBridgeProcessor::getDownloadFormat() const
 {
     const juce::ScopedLock sl (deviceLock);
     return downloadFormat;
 }
 
-void StreamBridgeProcessor::setDownloadFormat (int formatIndex)
+void StreamBridgeProcessor::setDownloadFormat (AudioDownloader::Format format)
 {
     const juce::ScopedLock sl (deviceLock);
-    downloadFormat = formatIndex;
+    downloadFormat = format;
 }
 
 juce::String StreamBridgeProcessor::findVirtualCable()

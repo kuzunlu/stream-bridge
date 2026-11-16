@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Builds a small ffmpeg.exe that can only do what the YouTube downloader needs: read the
-# audio that YouTube serves (Opus, AAC and a few others) and write MP3 or WAV.
+# audio that YouTube serves (Opus, AAC and a few others) and write MP3, FLAC or WAV.
 # A normal ffmpeg build is over 100 MB. This one is a few MB.
 #
 # Runs in MSYS2 with the UCRT64 environment. build.bat calls it.
@@ -74,8 +74,8 @@ tar -xJf "$ffmpegArchive" -C "$work"
                 --enable-demuxer=matroska,mov,mp3,ogg,flac,wav,aac,ac3,eac3,mpegts \
                 --enable-parser=opus,aac,aac_latm,mpegaudio,vorbis,flac,ac3 \
                 --enable-decoder=opus,aac,aac_latm,mp3float,vorbis,flac,alac,ac3,eac3,pcm_s16le,pcm_s24le,pcm_f32le \
-                --enable-encoder=libmp3lame,pcm_s16le \
-                --enable-muxer=mp3,wav \
+                --enable-encoder=libmp3lame,flac,pcm_s16le \
+                --enable-muxer=mp3,flac,wav \
                 --enable-filter=aresample,aformat,anull,atrim \
                 --pkg-config-flags=--static \
                 --extra-cflags="-I$prefix/include" \

@@ -41,17 +41,15 @@ public:
     void setGain (float newGain)               { gain.store (newGain); }
     void push (const juce::AudioBuffer<float>& buffer);
 
-    // Buffer tuning mode. While it is on, the output side measures how close it gets to
-    // a dropout and counts dropouts. While it is off, none of this is measured.
-    void setMonitoring (bool shouldMonitor);
-    bool isMonitoring() const                  { return monitoring.load(); }
+    // Stream health: how close the output got to running out of audio, and dropouts.
+    // Always measured (a few comparisons per output block). Starts again when the buffer
+    // size changes or the device starts.
     std::optional<double> takeLowestMarginMs();             // lowest since the last call
-    std::optional<double> getSessionLowestMarginMs() const; // lowest since tuning started
+    std::optional<double> getSessionLowestMarginMs() const; // lowest since the restart
     std::optional<double> getSecondsSinceLastDropout() const;
 
     // Any thread.
     bool isRunning() const                     { return running.load(); }
-    double getBufferedMs() const;
     double getTargetMs() const                 { return targetMs.load(); }
     double getMinimumMs() const                { return minimumMs.load(); }
     int getDropoutCount() const                { return dropouts.load(); }
@@ -68,8 +66,11 @@ private:
     void audioDeviceStopped() override;
     void audioDeviceError (const juce::String& errorMessage) override;
     void audioDeviceListChanged() override;
+    void resetHealth();
 
-    static constexpr int fifoSize = 1 << 18;    // about 5 s at 48 kHz, so large buffer settings fit
+    // 1 MB. Fits the largest buffer setting (250 ms) at 192 kHz, with room to spare.
+    static constexpr int fifoSize = 1 << 17;
+    static constexpr double maxTargetSamples = fifoSize / 2.0;
     static constexpr double maxSpeedCorrection = 0.002;
     static constexpr double jitterMarginSamples = 32.0;
 
@@ -100,7 +101,7 @@ private:
     std::atomic<bool> running { false };
     std::atomic<float> gain { 1.0f };
     std::atomic<int> dropouts { 0 };
-    std::atomic<bool> monitoring { false };
+    std::atomic<juce::uint32> lastPushTime { 0 };
     std::atomic<int> recentLowestMargin { INT_MAX };
     std::atomic<int> sessionLowestMargin { INT_MAX };
     std::atomic<juce::uint32> lastDropoutTime { 0 };

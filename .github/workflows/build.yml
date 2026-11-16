@@ -17,6 +17,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: true
+          fetch-depth: 0    # all tags, so the build knows its version (git describe)
 
       # The small ffmpeg (ffmpeg/build.sh) takes a few minutes, so keep it until the script changes.
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -48,6 +49,25 @@ jobs:
           path: build/StreamBridge_artefacts/Release/VST3/
           if-no-files-found: error
 
+      - name: Build the installer
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            choco install innosetup --no-progress -y
+            if ($LASTEXITCODE -ne 0) { exit 1 }
+          }
+          $version = git describe --tags --match "v[0-9]*"
+          if ($LASTEXITCODE -ne 0 -or -not $version) { $version = "v0.0.0" }
+          & $iscc /Q "/DAppVersion=$($version.Substring(1))" installer\StreamBridge.iss
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: Stream-Bridge-Installer
+          path: build/installer/*.exe
+          if-no-files-found: error
+
       - name: Publish release
         if: startsWith(github.ref, 'refs/tags/v')
         shell: pwsh
@@ -56,11 +76,13 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           Compress-Archive -Path "build/StreamBridge_artefacts/Release/VST3/Stream Bridge.vst3" -DestinationPath "Stream-Bridge-$env:TAG.zip"
+          $installer = Get-ChildItem build/installer/*.exe | Select-Object -First 1
           $notes = @(
-            "1. Unzip and copy the ``Stream Bridge.vst3`` folder to ``C:\Program Files\Common Files\VST3\``."
-            "2. Rescan plugins in your DAW."
-            "3. Put **Stream Bridge** on the Master channel and pick your virtual cable as Output."
+            "**Easiest:** run ``$($installer.Name)``, then rescan plugins in your DAW."
             ""
+            "**Or by hand:** unzip ``Stream-Bridge-$env:TAG.zip`` and copy the ``Stream Bridge.vst3`` folder to ``C:\Program Files\Common Files\VST3\``, then rescan plugins."
+            ""
+            "Put **Stream Bridge** on the Master channel and pick your virtual cable as Output."
             "Needs 64-bit Windows and a virtual audio cable (for example VB-Audio Virtual Cable)."
           ) -join "`n"
-          gh release create "$env:TAG" "Stream-Bridge-$env:TAG.zip" --title "Stream Bridge $env:TAG" --notes "$notes"
+          gh release create "$env:TAG" "Stream-Bridge-$env:TAG.zip" $installer.FullName --title "Stream Bridge $env:TAG" --notes "$notes"

@@ -1,4 +1,41 @@
 #include "PluginEditor.h"
+#include "WindowsAudioCheck.h"
+
+#ifndef STREAM_BRIDGE_VERSION
+ #define STREAM_BRIDGE_VERSION "dev"
+#endif
+
+namespace
+{
+    juce::String describeDuration (double seconds)
+    {
+        if (seconds < 60.0)
+        {
+            const auto s = juce::roundToInt (seconds);
+            return juce::String (s) + (s == 1 ? " second" : " seconds");
+        }
+
+        const auto m = juce::roundToInt (seconds / 60.0);
+        return juce::String (m) + (m == 1 ? " minute" : " minutes");
+    }
+}
+
+void DraggableFileLabel::mouseDrag (const juce::MouseEvent&)
+{
+    if (dragging || getFile == nullptr)
+        return;
+
+    if (const auto file = getFile(); file.existsAsFile())
+    {
+        dragging = true;
+        juce::DragAndDropContainer::performExternalDragDropOfFiles (juce::StringArray (file.getFullPathName()), false, this,
+                                                                    [safe = juce::Component::SafePointer<DraggableFileLabel> (this)]
+                                                                    {
+                                                                        if (safe != nullptr)
+                                                                            safe->dragging = false;
+                                                                    });
+    }
+}
 
 StreamBridgeEditor::StreamBridgeEditor (StreamBridgeProcessor& p)
     : AudioProcessorEditor (p),
@@ -9,44 +46,80 @@ StreamBridgeEditor::StreamBridgeEditor (StreamBridgeProcessor& p)
 {
     for (auto* c : std::initializer_list<juce::Component*> { &deviceLabel, &deviceBox, &refreshButton,
                                                              &enabledButton, &gainLabel, &gainSlider,
-                                                             &bufferLabel, &bufferSlider, &tuneButton,
-                                                             &marginLabel, &adviceLabel, &statusLabel,
-                                                             &downloadHeading, &linkLabel, &linkEditor,
+                                                             &bufferLabel, &bufferSlider, &detailsButton,
+                                                             &healthLabel, &marginLabel, &adviceLabel,
+                                                             &statusLabel, &warningLabel, &getCableButton,
+                                                             &downloadHeading, &versionLabel, &linkLabel, &linkEditor,
                                                              &folderLabel, &folderPath, &folderButton,
                                                              &formatLabel, &formatBox, &downloadButton,
-                                                             &updateButton, &progressBar, &downloadStatus })
+                                                             &updateButton, &progressBar, &downloadStatus,
+                                                             &savedFileLabel, &showButton })
         addAndMakeVisible (c);
 
+    // Streaming
     deviceBox.onChange = [this]
     {
         if (deviceBox.getSelectedItemIndex() >= 0)
             bridgeProcessor.selectOutputDevice (deviceBox.getText());
-    };
 
-    refreshButton.onClick = [this] { refreshDeviceList(); };
-
-    gainSlider.setTextValueSuffix (" dB");
-    bufferSlider.setTextValueSuffix (" ms");
-    statusLabel.setJustificationType (juce::Justification::topLeft);
-    statusLabel.setMinimumHorizontalScale (1.0f);
-
-    tuneButton.onClick = [this]
-    {
-        auto& bridge = bridgeProcessor.bridge;
-        bridge.setMonitoring (! bridge.isMonitoring());
-        recentMargins.fill ({});
         timerCallback();
     };
 
+    refreshButton.onClick = [this]
+    {
+        refreshDeviceList();
+
+        // Also a way to reconnect by hand.
+        if (const auto selected = bridgeProcessor.getSelectedOutputDevice(); selected.isNotEmpty() && ! bridgeProcessor.bridge.isRunning())
+            bridgeProcessor.selectOutputDevice (selected);
+        else
+            bridgeProcessor.checkWindowsSettings();
+
+        timerCallback();
+    };
+
+    gainSlider.setTextValueSuffix (" dB");
+    bufferSlider.setTextValueSuffix (" ms");
+
+    detailsButton.setClickingTogglesState (true);
+    detailsButton.onClick = [this]
+    {
+        recentMargins.fill ({});
+        timerCallback();
+        updateLayout();
+    };
+
+    for (auto* label : { &healthLabel, &marginLabel, &adviceLabel, &statusLabel })
+    {
+        label->setJustificationType (juce::Justification::topLeft);
+        label->setMinimumHorizontalScale (1.0f);
+    }
+
+    warningLabel.setJustificationType (juce::Justification::topLeft);
+    warningLabel.setColour (juce::Label::textColourId, juce::Colours::orange);
+
+    // Shown only when needed (see updateLayout).
+    for (auto* c : std::initializer_list<juce::Component*> { &marginLabel, &adviceLabel, &warningLabel, &getCableButton,
+                                                             &savedFileLabel, &showButton })
+        c->setVisible (false);
+    getCableButton.onClick = [] { juce::URL ("https://vb-audio.com/Cable/").launchInDefaultBrowser(); };
+
+    // Downloader
     downloadHeading.setFont (juce::FontOptions (16.0f, juce::Font::bold));
+    versionLabel.setText (juce::String ("Stream Bridge ") + STREAM_BRIDGE_VERSION, juce::dontSendNotification);
+    versionLabel.setJustificationType (juce::Justification::centredRight);
+    versionLabel.setColour (juce::Label::textColourId, juce::Colours::grey);
     linkEditor.setTextToShowWhenEmpty ("Paste a YouTube link here", juce::Colours::grey);
     folderPath.setMinimumHorizontalScale (1.0f);
     folderButton.onClick = [this] { chooseDownloadFolder(); };
 
-    const auto formats = AudioDownloader::getFormatNames();
-    formatBox.addItemList (formats, 1);
-    formatBox.setSelectedItemIndex (juce::jlimit (0, formats.size() - 1, bridgeProcessor.getDownloadFormat()), juce::dontSendNotification);
-    formatBox.onChange = [this] { bridgeProcessor.setDownloadFormat (formatBox.getSelectedItemIndex()); };
+    formatBox.addItemList (AudioDownloader::getFormatNames(), 1);
+    formatBox.setSelectedItemIndex ((int) bridgeProcessor.getDownloadFormat(), juce::dontSendNotification);
+    formatBox.onChange = [this]
+    {
+        if (formatBox.getSelectedItemIndex() >= 0)
+            bridgeProcessor.setDownloadFormat ((AudioDownloader::Format) formatBox.getSelectedItemIndex());
+    };
 
     downloadButton.onClick = [this]
     {
@@ -55,8 +128,7 @@ StreamBridgeEditor::StreamBridgeEditor (StreamBridgeProcessor& p)
         if (downloader.isBusy())
             downloader.cancel();
         else
-            downloader.startDownload (linkEditor.getText(), bridgeProcessor.getDownloadFolder(),
-                                      (AudioDownloader::Format) juce::jmax (0, formatBox.getSelectedItemIndex()));
+            downloader.startDownload (linkEditor.getText(), bridgeProcessor.getDownloadFolder(), bridgeProcessor.getDownloadFormat());
 
         timerCallback();
     };
@@ -70,11 +142,40 @@ StreamBridgeEditor::StreamBridgeEditor (StreamBridgeProcessor& p)
     downloadStatus.setJustificationType (juce::Justification::topLeft);
     downloadStatus.setMinimumHorizontalScale (1.0f);
 
+    savedFileLabel.getFile = [this] { return bridgeProcessor.downloader.getSavedFile(); };
+    savedFileLabel.setMouseCursor (juce::MouseCursor::DraggingHandCursor);
+    savedFileLabel.setColour (juce::Label::outlineColourId, juce::Colours::grey);
+    savedFileLabel.setMinimumHorizontalScale (1.0f);
+    showButton.onClick = [this] { bridgeProcessor.downloader.getSavedFile().revealToUser(); };
+
+    // Tooltips
+    deviceBox.setTooltip ("Where the copy of your Master channel goes. Pick a virtual cable, like CABLE Input. "
+                          "You should not hear this output yourself.");
+    refreshButton.setTooltip ("Look for outputs again, for example after installing a virtual cable. "
+                              "Also reconnects if the output stopped.");
+    enabledButton.setTooltip ("On: viewers hear your DAW. Off: they hear nothing. Your own sound never changes.");
+    gainSlider.setTooltip ("Volume of the copy only. Your own sound does not change.");
+    bufferSlider.setTooltip ("How far behind the copy plays, so timing hiccups do not cause gaps. "
+                             "Larger is safer, smaller has less delay for viewers. Your own sound is never delayed.");
+    detailsButton.setTooltip ("Show the measurements behind the stream status.");
+    healthLabel.setTooltip ("Whether viewers get the sound without gaps. A dropout is a short gap they hear.");
+    statusLabel.setTooltip ("The output the copy goes to, its sample rate, and the stream buffer in use.");
+    getCableButton.setTooltip ("Opens the VB-Audio website, where VB-Cable is free to download.");
+    linkEditor.setTooltip ("A YouTube link. For a playlist link, only its first video is saved.");
+    folderButton.setTooltip ("Choose where downloaded audio is saved.");
+    formatBox.setTooltip ("YouTube's audio is about 128-160 kbps, so MP3 192 kbps keeps all of it. "
+                          "FLAC and WAV are exact copies of what YouTube sends, in bigger files.");
+    downloadButton.setTooltip ("Download the audio and save it in the chosen format.");
+    updateButton.setTooltip ("Get the newest yt-dlp. A failed download also does this by itself, then tries again.");
+    savedFileLabel.setTooltip ("Drag this onto an Ableton track.");
+    showButton.setTooltip ("Open the folder with the saved file.");
+
+    bridgeProcessor.checkWindowsSettings();
     refreshDeviceList();
     timerCallback();
     startTimerHz (4);
 
-    setSize (480, 470);
+    setSize (editorWidth, layOut (false));
 }
 
 StreamBridgeEditor::~StreamBridgeEditor()
@@ -93,6 +194,8 @@ void StreamBridgeEditor::refreshDeviceList()
 
     if (index >= 0)
         deviceBox.setSelectedItemIndex (index, juce::dontSendNotification);
+
+    noCableFound = std::none_of (names.begin(), names.end(), [] (const auto& name) { return WindowsAudioCheck::looksVirtual (name); });
 }
 
 void StreamBridgeEditor::chooseDownloadFolder()
@@ -119,7 +222,8 @@ void StreamBridgeEditor::timerCallback()
     }
 
     statusLabel.setText (bridgeProcessor.getStatusText(), juce::dontSendNotification);
-    updateTuningDisplay();
+    updateHealth();
+    updateWarning();
 
     const auto& downloader = bridgeProcessor.downloader;
     const auto busy = downloader.isBusy();
@@ -129,65 +233,125 @@ void StreamBridgeEditor::timerCallback()
     updateButton.setEnabled (! busy);
     downloadProgress = downloader.getProgress();
     downloadStatus.setText (downloader.getStatus(), juce::dontSendNotification);
+    updateSavedFile();
 }
 
-void StreamBridgeEditor::updateTuningDisplay()
+void StreamBridgeEditor::updateHealth()
 {
     auto& bridge = bridgeProcessor.bridge;
-    const auto tuning = bridge.isMonitoring();
-
-    tuneButton.setButtonText (tuning ? "Lock" : "Tune");
-    bufferSlider.setEnabled (tuning);
-    marginLabel.setVisible (tuning);
-    adviceLabel.setVisible (tuning);
-
-    // When locked, nothing is measured, so there is nothing to show.
-    if (! tuning)
-        return;
+    const auto details = detailsButton.getToggleState();
 
     recentMargins[nextMargin] = bridge.takeLowestMarginMs();
     nextMargin = (nextMargin + 1) % recentMargins.size();
 
-    std::optional<double> lowest;
+    const auto setLine = [] (juce::Label& label, const juce::String& text, juce::Colour colour)
+    {
+        label.setText (text, juce::dontSendNotification);
+        label.setColour (juce::Label::textColourId, colour);
+    };
+
+    const auto green = juce::Colours::limegreen, orange = juce::Colours::orange, red = juce::Colours::red, grey = juce::Colours::grey;
+
+    if (! bridge.isRunning())
+    {
+        setLine (healthLabel, {}, grey);
+        setLine (marginLabel, {}, grey);
+        setLine (adviceLabel, {}, grey);
+        return;
+    }
+
+    if (bridgeProcessor.parameters.getRawParameterValue ("enabled")->load() < 0.5f)
+    {
+        setLine (healthLabel, "Send audio is off, so viewers hear nothing.", grey);
+        setLine (marginLabel, {}, grey);
+        setLine (adviceLabel, {}, grey);
+        return;
+    }
+
+    // The buffer that would have left 2 ms to spare at the worst moment so far.
+    std::optional<int> suggested;
+
+    if (const auto lowest = bridge.getSessionLowestMarginMs())
+        suggested = (int) std::ceil (juce::jmax (bridge.getMinimumMs(), bridge.getTargetMs() - *lowest + 2.0));
+
+    const auto dropouts = bridge.getDropoutCount();
+    const auto sinceDropout = bridge.getSecondsSinceLastDropout();
+    const auto raise = suggested.has_value() && *suggested > juce::roundToInt (bridge.getTargetMs())
+                         ? " Set the buffer to about " + juce::String (*suggested) + " ms."
+                         : juce::String();
+
+    if (dropouts == 0)
+        setLine (healthLabel, "Stream OK, no dropouts.", green);
+    else if (sinceDropout.has_value() && *sinceDropout < 10.0)
+        setLine (healthLabel, "Dropout just now: viewers heard a short gap." + raise, red);
+    else
+        setLine (healthLabel, juce::String (dropouts) + (dropouts == 1 ? " dropout" : " dropouts") + ", the last one "
+                                  + describeDuration (sinceDropout.value_or (0.0)) + " ago." + raise, orange);
+
+    if (! details)
+        return;
+
+    std::optional<double> recentLowest;
 
     for (const auto& margin : recentMargins)
-        if (margin.has_value() && (! lowest.has_value() || *margin < *lowest))
-            lowest = margin;
+        if (margin.has_value() && (! recentLowest.has_value() || *margin < *recentLowest))
+            recentLowest = margin;
 
-    if (! lowest.has_value())
-    {
-        marginLabel.setText ("Safety margin: waiting for audio...", juce::dontSendNotification);
-        marginLabel.setColour (juce::Label::textColourId, juce::Colours::grey);
-    }
+    if (! recentLowest.has_value())
+        setLine (marginLabel, "Safety margin: waiting for audio...", grey);
     else
+        setLine (marginLabel, "Safety margin (last 2 seconds): " + juce::String (*recentLowest, 1) + " ms",
+                 *recentLowest >= 3.0 ? green : *recentLowest >= 1.0 ? orange : red);
+
+    auto advice = "Lowest possible buffer: " + juce::String (juce::roundToInt (std::ceil (bridge.getMinimumMs()))) + " ms";
+
+    if (suggested.has_value())
+        advice << "   Suggested so far: " << *suggested << " ms";
+
+    setLine (adviceLabel, advice, getLookAndFeel().findColour (juce::Label::textColourId));
+}
+
+void StreamBridgeEditor::updateWarning()
+{
+    auto warning = bridgeProcessor.getWarningText();
+
+    if (warning.isEmpty() && noCableFound)
+        warning = "No virtual cable found. Install the free VB-Cable, restart the PC, then pick CABLE Input above.";
+
+    const auto changed = warning != warningLabel.getText() || noCableFound != getCableButton.isVisible();
+
+    warningLabel.setText (warning, juce::dontSendNotification);
+    warningLabel.setVisible (warning.isNotEmpty());
+    getCableButton.setVisible (noCableFound);
+
+    if (changed)
+        updateLayout();
+}
+
+void StreamBridgeEditor::updateSavedFile()
+{
+    const auto file = bridgeProcessor.downloader.isBusy() ? juce::File() : bridgeProcessor.downloader.getSavedFile();
+    const auto show = file.existsAsFile();
+
+    savedFileLabel.setText (show ? "Drag into Ableton:  " + file.getFileName() : juce::String(), juce::dontSendNotification);
+
+    if (show != savedFileLabel.isVisible())
     {
-        const auto colour = *lowest >= 3.0 ? juce::Colours::limegreen
-                          : *lowest >= 1.0 ? juce::Colours::orange
-                                           : juce::Colours::red;
-
-        marginLabel.setText ("Safety margin (last 2 seconds): " + juce::String (*lowest, 1) + " ms", juce::dontSendNotification);
-        marginLabel.setColour (juce::Label::textColourId, colour);
+        savedFileLabel.setVisible (show);
+        showButton.setVisible (show);
+        updateLayout();
     }
+}
 
-    juce::String advice;
+void StreamBridgeEditor::updateLayout()
+{
+    marginLabel.setVisible (detailsButton.getToggleState());
+    adviceLabel.setVisible (detailsButton.getToggleState());
 
-    if (const auto sinceDropout = bridge.getSecondsSinceLastDropout())
-    {
-        const auto seconds = juce::roundToInt (*sinceDropout);
-        advice << "Dropouts: " << bridge.getDropoutCount() << ", last one " << seconds << (seconds == 1 ? " second" : " seconds") << " ago.  ";
-    }
-
-    // Suggest the buffer that would have left 2 ms to spare at the worst moment so far.
-    if (const auto sessionLowest = bridge.getSessionLowestMarginMs())
-    {
-        const auto suggested = juce::jmax (bridge.getMinimumMs(), bridge.getTargetMs() - *sessionLowest + 2.0);
-        advice << "Suggested buffer so far: " << juce::roundToInt (std::ceil (suggested)) << " ms";
-    }
-
-    const auto recentDropout = bridge.getSecondsSinceLastDropout().value_or (1.0e9) < 5.0;
-    adviceLabel.setText (advice, juce::dontSendNotification);
-    adviceLabel.setColour (juce::Label::textColourId, recentDropout ? juce::Colours::red
-                                                                    : getLookAndFeel().findColour (juce::Label::textColourId));
+    if (const auto height = layOut (false); height != getHeight())
+        setSize (editorWidth, height);
+    else
+        resized();
 }
 
 void StreamBridgeEditor::paint (juce::Graphics& g)
@@ -200,61 +364,104 @@ void StreamBridgeEditor::paint (juce::Graphics& g)
 
 void StreamBridgeEditor::resized()
 {
-    auto area = getLocalBounds().reduced (12);
+    layOut (true);
+}
+
+int StreamBridgeEditor::layOut (bool apply)
+{
+    const auto place = [apply] (juce::Component& component, juce::Rectangle<int> bounds)
+    {
+        if (apply)
+            component.setBounds (bounds);
+    };
+
+    auto area = juce::Rectangle<int> (0, 0, editorWidth, 10000).reduced (12);
 
     auto row = area.removeFromTop (28);
-    deviceLabel.setBounds (row.removeFromLeft (60));
-    refreshButton.setBounds (row.removeFromRight (80));
+    place (deviceLabel, row.removeFromLeft (60));
+    place (refreshButton, row.removeFromRight (80));
     row.removeFromRight (8);
-    deviceBox.setBounds (row);
+    place (deviceBox, row);
 
     area.removeFromTop (10);
     row = area.removeFromTop (28);
-    enabledButton.setBounds (row.removeFromLeft (120));
-    gainLabel.setBounds (row.removeFromLeft (60));
-    gainSlider.setBounds (row);
+    place (enabledButton, row.removeFromLeft (120));
+    place (gainLabel, row.removeFromLeft (60));
+    place (gainSlider, row);
 
     area.removeFromTop (10);
     row = area.removeFromTop (28);
-    bufferLabel.setBounds (row.removeFromLeft (180));
-    tuneButton.setBounds (row.removeFromRight (60));
+    place (bufferLabel, row.removeFromLeft (120));
+    place (detailsButton, row.removeFromRight (70));
     row.removeFromRight (8);
-    bufferSlider.setBounds (row);
+    place (bufferSlider, row);
+
+    area.removeFromTop (6);
+    place (healthLabel, area.removeFromTop (36));
+
+    if (detailsButton.getToggleState())
+    {
+        place (marginLabel, area.removeFromTop (20));
+        place (adviceLabel, area.removeFromTop (20));
+    }
 
     area.removeFromTop (4);
-    marginLabel.setBounds (area.removeFromTop (20));
-    adviceLabel.setBounds (area.removeFromTop (20));
+    place (statusLabel, area.removeFromTop (36));
 
-    area.removeFromTop (6);
-    statusLabel.setBounds (area.removeFromTop (40));
+    if (warningLabel.isVisible() || getCableButton.isVisible())
+    {
+        area.removeFromTop (4);
+        row = area.removeFromTop (52);
 
-    area.removeFromTop (16);
-    downloadHeading.setBounds (area.removeFromTop (24));
+        if (getCableButton.isVisible())
+        {
+            place (getCableButton, row.removeFromRight (100).removeFromTop (28));
+            row.removeFromRight (8);
+        }
+
+        place (warningLabel, row);
+    }
+
+    area.removeFromTop (18);
+    row = area.removeFromTop (24);
+    place (versionLabel, row.removeFromRight (180));
+    place (downloadHeading, row);
 
     area.removeFromTop (6);
     row = area.removeFromTop (28);
-    linkLabel.setBounds (row.removeFromLeft (60));
-    linkEditor.setBounds (row);
+    place (linkLabel, row.removeFromLeft (60));
+    place (linkEditor, row);
 
     area.removeFromTop (8);
     row = area.removeFromTop (28);
-    folderLabel.setBounds (row.removeFromLeft (60));
-    folderButton.setBounds (row.removeFromRight (80));
+    place (folderLabel, row.removeFromLeft (60));
+    place (folderButton, row.removeFromRight (80));
     row.removeFromRight (8);
-    folderPath.setBounds (row);
+    place (folderPath, row);
 
     area.removeFromTop (8);
     row = area.removeFromTop (28);
-    formatLabel.setBounds (row.removeFromLeft (60));
-    updateButton.setBounds (row.removeFromRight (100));
+    place (formatLabel, row.removeFromLeft (60));
+    place (updateButton, row.removeFromRight (100));
     row.removeFromRight (8);
-    downloadButton.setBounds (row.removeFromRight (90));
+    place (downloadButton, row.removeFromRight (90));
     row.removeFromRight (8);
-    formatBox.setBounds (row);
+    place (formatBox, row);
 
     area.removeFromTop (10);
-    progressBar.setBounds (area.removeFromTop (18));
+    place (progressBar, area.removeFromTop (18));
 
     area.removeFromTop (6);
-    downloadStatus.setBounds (area);
+    place (downloadStatus, area.removeFromTop (36));
+
+    if (savedFileLabel.isVisible())
+    {
+        area.removeFromTop (4);
+        row = area.removeFromTop (28);
+        place (showButton, row.removeFromRight (110));
+        row.removeFromRight (8);
+        place (savedFileLabel, row);
+    }
+
+    return area.getY() + 12;
 }
