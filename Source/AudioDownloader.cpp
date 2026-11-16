@@ -16,7 +16,7 @@ struct AudioDownloader::Tool
 
 namespace
 {
-    constexpr int ytDlp = 0, ffmpeg = 1, deno = 2;
+    constexpr int ytDlp = 0, ffmpeg = 1, quickJs = 2;
 
     const AudioDownloader::Tool tools[] =
     {
@@ -28,12 +28,14 @@ namespace
         { "ffmpeg", "ffmpeg-9.0.2",
           "https://github.com/GyanD/codexffmpeg/releases/download/9.0.2/ffmpeg-9.0.2-essentials_build.zip",
           "60f467265b1e312373dbcd92200c2618a74850f98d3d078e94296bb3fa2047ba",
-          true, { "ffmpeg.exe", "ffprobe.exe" } },
+          true, { "ffmpeg.exe", nullptr } },
 
-        { "Deno", "deno-2.9.8",
-          "https://github.com/denoland/deno/releases/download/v2.9.8/deno-x86_64-pc-windows-msvc.zip",
-          "cba84b26e0df5ae7f74fc66b86a95b866872a86292ebd84fa1e959927edd93bf",
-          true, { "deno.exe", nullptr } },
+        // A small JavaScript runtime. yt-dlp needs one to read YouTube's pages, and it
+        // finds QuickJS by the file name qjs.exe.
+        { "QuickJS", "quickjs-ng-0.18.0",
+          "https://github.com/quickjs-ng/quickjs/releases/download/v0.18.0/qjs-windows-x86_64.exe",
+          "ff03398d74ea6e6bd3a8e58058f7003225abcac229d7d57775b7aaae812a49c7",
+          false, { "qjs.exe", nullptr } },
     };
 
     juce::String megabytes (juce::int64 bytes)
@@ -127,11 +129,35 @@ juce::File AudioDownloader::getToolFile (const Tool& tool, const char* fileName)
     return toolsFolder.getChildFile (tool.folder).getChildFile (fileName);
 }
 
+void AudioDownloader::removeOldTools()
+{
+    for (const auto& folder : toolsFolder.findChildFiles (juce::File::findDirectories, false))
+    {
+        const Tool* match = nullptr;
+
+        for (const auto& tool : tools)
+            if (folder.getFileName() == tool.folder)
+                match = &tool;
+
+        if (match == nullptr)
+        {
+            folder.deleteRecursively();
+            continue;
+        }
+
+        for (const auto& file : folder.findChildFiles (juce::File::findFiles, false))
+            if (file.getFileName() != match->files[0] && file.getFileName() != juce::String (match->files[1]))
+                file.deleteFile();
+    }
+}
+
 void AudioDownloader::run()
 {
-    for (int i = 0; i < 3; ++i)
+    removeOldTools();
+
+    for (const auto& tool : tools)
     {
-        if (! installTool (tools[i]))
+        if (! installTool (tool))
         {
             if (cancelled.load())
                 setStatus ("Cancelled.");
@@ -146,45 +172,74 @@ void AudioDownloader::run()
 
     if (job == Job::update)
     {
-        const auto exitCode = runYtDlp ({ "-U" });
+        const auto exitCode = runTool (tools[ytDlp], { "-U" });
         setStatus (cancelled.load() ? "Cancelled." : exitCode == 0 ? lastLine : "Update failed: " + lastLine);
         progress.store (exitCode == 0 ? 1.0 : 0.0);
         return;
     }
 
-    const auto isWav = jobFormat == Format::wav;
-    const char* bitrates[] = { "320K", "256K", "192K", "128K" };
+    // Step 1: yt-dlp downloads the best audio stream, unchanged, into a private work folder.
+    const auto workFolder = toolsFolder.getSiblingFile ("work").getChildFile (juce::Uuid().toString());
+    workFolder.createDirectory();
 
     juce::StringArray arguments { "--no-playlist", "--newline", "--progress", "--encoding", "utf-8",
                                   "--ffmpeg-location", toolsFolder.getChildFile (tools[ffmpeg].folder).getFullPathName(),
-                                  "--no-js-runtimes", "--js-runtimes", "deno:" + getToolFile (tools[deno], "deno.exe").getFullPathName(),
-                                  "-f", "bestaudio/best", "-x", "--audio-format", isWav ? "wav" : "mp3" };
-
-    if (! isWav)
-        arguments.addArray ({ "--audio-quality", bitrates[(int) jobFormat] });
-
-    arguments.addArray ({ "-o", jobFolder.getChildFile ("%(title)s.%(ext)s").getFullPathName(),
-                          "--print", "after_move:SAVED|%(filepath)s",
-                          "--", jobUrl });
+                                  "--no-js-runtimes", "--js-runtimes", "quickjs:" + getToolFile (tools[quickJs], "qjs.exe").getFullPathName(),
+                                  "-f", "bestaudio/best",
+                                  "-o", workFolder.getChildFile ("%(title)s.%(ext)s").getFullPathName(),
+                                  "--print", "after_move:SAVED|%(filepath)s",
+                                  "--", jobUrl };
 
     setStatus ("Reading the YouTube page...");
     progress.store (-1.0);
 
-    const auto exitCode = runYtDlp (arguments);
+    const auto downloadExitCode = runTool (tools[ytDlp], arguments);
+
+    if (cancelled.load() || downloadExitCode != 0 || savedFile.isEmpty())
+    {
+        workFolder.deleteRecursively();
+        setStatus (cancelled.load()            ? "Cancelled."
+                   : lastError.isNotEmpty()    ? lastError
+                                               : "Download failed: " + lastLine);
+        progress.store (0.0);
+        return;
+    }
+
+    // Step 2: ffmpeg converts it into the save folder, with the same settings yt-dlp uses.
+    const auto isWav = jobFormat == Format::wav;
+    const char* bitrates[] = { "320k", "256k", "192k", "128k" };
+    const juce::File downloaded (savedFile);
+    const auto target = jobFolder.getChildFile (downloaded.getFileNameWithoutExtension() + (isWav ? ".wav" : ".mp3"));
+
+    juce::StringArray conversion { "-hide_banner", "-nostdin", "-y", "-i", downloaded.getFullPathName(), "-vn" };
+
+    if (isWav)
+        conversion.addArray ({ "-c:a", "pcm_s16le" });
+    else
+        conversion.addArray ({ "-c:a", "libmp3lame", "-b:a", bitrates[(int) jobFormat] });
+
+    conversion.add (target.getFullPathName());
+
+    setStatus (isWav ? "Converting to WAV..." : "Converting to MP3...");
+    progress.store (-1.0);
+
+    const auto convertExitCode = runTool (tools[ffmpeg], conversion);
+    workFolder.deleteRecursively();
 
     if (cancelled.load())
     {
+        target.deleteFile();
         setStatus ("Cancelled.");
         progress.store (0.0);
     }
-    else if (exitCode == 0 && savedFile.isNotEmpty())
+    else if (convertExitCode == 0 && target.existsAsFile())
     {
-        setStatus ("Saved: " + juce::File (savedFile).getFileName());
+        setStatus ("Saved: " + target.getFileName());
         progress.store (1.0);
     }
     else
     {
-        setStatus (lastError.isNotEmpty() ? lastError : "Download failed: " + lastLine);
+        setStatus ("Converting failed: " + lastLine);
         progress.store (0.0);
     }
 }
@@ -332,9 +387,9 @@ bool AudioDownloader::downloadFile (const juce::String& url, const juce::File& t
     return total <= 0 || done == total;
 }
 
-int AudioDownloader::runYtDlp (const juce::StringArray& arguments)
+int AudioDownloader::runTool (const Tool& tool, const juce::StringArray& arguments)
 {
-    juce::StringArray command { getToolFile (tools[ytDlp], "yt-dlp.exe").getFullPathName() };
+    juce::StringArray command { getToolFile (tool, tool.files[0]).getFullPathName() };
     command.addArray (arguments);
 
     {
@@ -344,7 +399,7 @@ int AudioDownloader::runYtDlp (const juce::StringArray& arguments)
         if (cancelled.load() || ! process->start (command))
         {
             process.reset();
-            lastLine = "Could not start yt-dlp.";
+            lastLine = "Could not start " + juce::String (tool.name) + ".";
             return -1;
         }
     }

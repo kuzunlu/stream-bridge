@@ -7,7 +7,7 @@
 // Saves the audio of a YouTube video into a folder, as MP3 or WAV.
 //
 // The work is done by three free tools that run as separate programs, so nothing here
-// can disturb the audio: yt-dlp (downloads), ffmpeg (converts) and Deno (lets yt-dlp
+// can disturb the audio: yt-dlp (downloads), ffmpeg (converts) and QuickJS (lets yt-dlp
 // read YouTube's pages). They are downloaded the first time they are needed, and each
 // download is checked against a pinned SHA-256 checksum before it is used.
 class AudioDownloader : private juce::Thread
@@ -35,10 +35,11 @@ private:
     enum class Job { download, update };
 
     void run() override;
+    void removeOldTools();
     bool installTool (const Tool& tool);
     bool downloadFile (const juce::String& url, const juce::File& target, const juce::String& toolName);
     juce::File getToolFile (const Tool& tool, const char* fileName) const;
-    int runYtDlp (const juce::StringArray& arguments);
+    int runTool (const Tool& tool, const juce::StringArray& arguments);
     void handleOutputLine (const juce::String& line);
     void setStatus (const juce::String& newStatus);
 
