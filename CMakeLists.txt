@@ -69,6 +69,7 @@ target_link_libraries(StreamBridge
 
 # Test program: runs the plugin code like Ableton does and measures it.
 juce_add_console_app(LatencyTest
+    VERSION ${STREAM_BRIDGE_VERSION_NUMBER}
     PRODUCT_NAME "Latency Test")
 
 target_sources(LatencyTest
@@ -96,6 +97,7 @@ target_link_libraries(LatencyTest
 
 # Test program: runs the YouTube downloader without a DAW.
 juce_add_console_app(DownloadTest
+    VERSION ${STREAM_BRIDGE_VERSION_NUMBER}
     PRODUCT_NAME "Download Test")
 
 target_sources(DownloadTest
