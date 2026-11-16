@@ -47,7 +47,7 @@ StreamBridgeEditor::StreamBridgeEditor (StreamBridgeProcessor& p)
     for (auto* c : std::initializer_list<juce::Component*> { &deviceLabel, &deviceBox, &refreshButton,
                                                              &enabledButton, &gainLabel, &gainSlider,
                                                              &bufferLabel, &bufferSlider, &detailsButton,
-                                                             &healthLabel, &marginLabel, &adviceLabel,
+                                                             &healthLabel, &marginLabel, &adviceLabel, &delayLabel,
                                                              &statusLabel, &warningLabel, &getCableButton,
                                                              &downloadHeading, &versionLabel, &linkLabel, &linkEditor,
                                                              &folderLabel, &folderPath, &folderButton,
@@ -89,7 +89,7 @@ StreamBridgeEditor::StreamBridgeEditor (StreamBridgeProcessor& p)
         updateLayout();
     };
 
-    for (auto* label : { &healthLabel, &marginLabel, &adviceLabel, &statusLabel })
+    for (auto* label : { &healthLabel, &marginLabel, &adviceLabel, &delayLabel, &statusLabel })
     {
         label->setJustificationType (juce::Justification::topLeft);
         label->setMinimumHorizontalScale (1.0f);
@@ -99,7 +99,7 @@ StreamBridgeEditor::StreamBridgeEditor (StreamBridgeProcessor& p)
     warningLabel.setColour (juce::Label::textColourId, juce::Colours::orange);
 
     // Shown only when needed (see updateLayout).
-    for (auto* c : std::initializer_list<juce::Component*> { &marginLabel, &adviceLabel, &warningLabel, &getCableButton,
+    for (auto* c : std::initializer_list<juce::Component*> { &marginLabel, &adviceLabel, &delayLabel, &warningLabel, &getCableButton,
                                                              &savedFileLabel, &showButton })
         c->setVisible (false);
     getCableButton.onClick = [] { juce::URL ("https://vb-audio.com/Cable/").launchInDefaultBrowser(); };
@@ -257,6 +257,7 @@ void StreamBridgeEditor::updateHealth()
         setLine (healthLabel, {}, grey);
         setLine (marginLabel, {}, grey);
         setLine (adviceLabel, {}, grey);
+        setLine (delayLabel, {}, grey);
         return;
     }
 
@@ -265,6 +266,7 @@ void StreamBridgeEditor::updateHealth()
         setLine (healthLabel, "Send audio is off, so viewers hear nothing.", grey);
         setLine (marginLabel, {}, grey);
         setLine (adviceLabel, {}, grey);
+        setLine (delayLabel, {}, grey);
         return;
     }
 
@@ -309,6 +311,14 @@ void StreamBridgeEditor::updateHealth()
         advice << "   Suggested so far: " << *suggested << " ms";
 
     setLine (adviceLabel, advice, getLookAndFeel().findColour (juce::Label::textColourId));
+
+    // What the plugin itself adds to the copy right now. The cable and Discord add theirs after it.
+    const auto pluginMs = bridge.getBufferedMs();
+    const auto windowsMs = bridge.getWindowsOutputMs();
+    setLine (delayLabel, "Delay of the copy now: about " + juce::String (juce::roundToInt (pluginMs + windowsMs)) + " ms ("
+                             + juce::String (juce::roundToInt (pluginMs)) + " plugin + " + juce::String (juce::roundToInt (windowsMs))
+                             + " Windows, " + (bridge.isLowLatencyMode() ? "low-latency mode)" : "normal mode)"),
+             getLookAndFeel().findColour (juce::Label::textColourId));
 }
 
 void StreamBridgeEditor::updateWarning()
@@ -347,6 +357,7 @@ void StreamBridgeEditor::updateLayout()
 {
     marginLabel.setVisible (detailsButton.getToggleState());
     adviceLabel.setVisible (detailsButton.getToggleState());
+    delayLabel.setVisible (detailsButton.getToggleState());
 
     if (const auto height = layOut (false); height != getHeight())
         setSize (editorWidth, height);
@@ -403,6 +414,7 @@ int StreamBridgeEditor::layOut (bool apply)
     {
         place (marginLabel, area.removeFromTop (20));
         place (adviceLabel, area.removeFromTop (20));
+        place (delayLabel, area.removeFromTop (20));
     }
 
     area.removeFromTop (4);

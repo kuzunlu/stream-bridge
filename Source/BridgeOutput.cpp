@@ -1,7 +1,7 @@
 #include "BridgeOutput.h"
 
 BridgeOutput::BridgeOutput()
-    : deviceType (juce::AudioIODeviceType::createAudioIODeviceType_WASAPI (juce::WASAPIDeviceMode::shared))
+    : deviceType (juce::AudioIODeviceType::createAudioIODeviceType_WASAPI (juce::WASAPIDeviceMode::sharedLowLatency))
 {
     if (deviceType != nullptr)
         deviceType->addListener (this);
@@ -32,12 +32,35 @@ juce::String BridgeOutput::openDevice (const juce::String& deviceName)
     if (deviceType == nullptr)
         return "Windows Audio is not available";
 
-    deviceType->scanForDevices();
+    // Windows' low-latency mode gives smaller buffers when the driver supports it.
+    // If the device cannot open that way, use the normal mode.
+    auto error = tryOpen (*deviceType, deviceName, true);
 
-    if (! deviceType->getDeviceNames (false).contains (deviceName))
+    if (error.isNotEmpty())
+    {
+        if (normalDeviceType == nullptr)
+            normalDeviceType.reset (juce::AudioIODeviceType::createAudioIODeviceType_WASAPI (juce::WASAPIDeviceMode::shared));
+
+        if (normalDeviceType != nullptr)
+            error = tryOpen (*normalDeviceType, deviceName, false);
+    }
+
+    if (error.isNotEmpty())
+        return error;
+
+    openDeviceName = deviceName;
+    device->start (this);
+    return {};
+}
+
+juce::String BridgeOutput::tryOpen (juce::AudioIODeviceType& type, const juce::String& deviceName, bool lowLatency)
+{
+    type.scanForDevices();
+
+    if (! type.getDeviceNames (false).contains (deviceName))
         return "Device not found: " + deviceName;
 
-    device.reset (deviceType->createDevice (deviceName, {}));
+    device.reset (type.createDevice (deviceName, {}));
 
     if (device == nullptr)
         return "Could not create device: " + deviceName;
@@ -53,7 +76,11 @@ juce::String BridgeOutput::openDevice (const juce::String& deviceName)
     juce::BigInteger outputChannels;
     outputChannels.setRange (0, juce::jmin (2, device->getOutputChannelNames().size()), true);
 
-    const auto error = device->open ({}, outputChannels, rate, device->getDefaultBufferSize());
+    // In low-latency mode the smallest size the driver allows, otherwise Windows' default.
+    const auto sizes = device->getAvailableBufferSizes();
+    const auto bufferSize = lowLatency && ! sizes.isEmpty() ? sizes.getFirst() : device->getDefaultBufferSize();
+
+    const auto error = device->open ({}, outputChannels, rate, bufferSize);
 
     if (error.isNotEmpty())
     {
@@ -61,8 +88,7 @@ juce::String BridgeOutput::openDevice (const juce::String& deviceName)
         return error;
     }
 
-    openDeviceName = deviceName;
-    device->start (this);
+    lowLatencyActive.store (lowLatency && bufferSize < device->getDefaultBufferSize());
     return {};
 }
 
@@ -232,6 +258,7 @@ void BridgeOutput::audioDeviceIOCallbackWithContext (const float* const*,
     // Play a little faster when the FIFO is fuller than the target, a little slower
     // when it is emptier. This cancels the clock drift between the two devices.
     smoothedFill += 0.01 * (ready - smoothedFill);
+    averageFillSamples.store (smoothedFill);
     const auto fillError = juce::jlimit (-1.0, 1.0, (smoothedFill - target) / target);
     const auto ratio = baseRatio * (1.0 + maxSpeedCorrection * fillError);
     const auto needed = (int) std::ceil (ratio * numSamples) + 4;
@@ -294,6 +321,7 @@ void BridgeOutput::audioDeviceIOCallbackWithContext (const float* const*,
 void BridgeOutput::audioDeviceAboutToStart (juce::AudioIODevice* startingDevice)
 {
     deviceSampleRate.store (startingDevice->getCurrentSampleRate());
+    windowsOutputMs.store (startingDevice->getOutputLatencyInSamples() * 1000.0 / juce::jmax (1.0, deviceSampleRate.load()));
 
     const auto blockSize = startingDevice->getCurrentBufferSizeSamples();
     scratch.setSize (2, blockSize * 8 + 64);    // room for up to an 8x sample rate difference

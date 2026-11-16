@@ -48,6 +48,12 @@ public:
     std::optional<double> getSessionLowestMarginMs() const; // lowest since the restart
     std::optional<double> getSecondsSinceLastDropout() const;
 
+    // The copy's delay right now: audio waiting in the plugin (averaged), plus Windows'
+    // output buffer for the device. The cable and Discord add their own delay after this.
+    double getBufferedMs() const               { return averageFillSamples.load() * 1000.0 / hostSampleRate.load(); }
+    double getWindowsOutputMs() const          { return windowsOutputMs.load(); }
+    bool isLowLatencyMode() const              { return lowLatencyActive.load(); }
+
     // Any thread.
     bool isRunning() const                     { return running.load(); }
     double getTargetMs() const                 { return targetMs.load(); }
@@ -67,6 +73,7 @@ private:
     void audioDeviceError (const juce::String& errorMessage) override;
     void audioDeviceListChanged() override;
     void resetHealth();
+    juce::String tryOpen (juce::AudioIODeviceType& type, const juce::String& deviceName, bool lowLatency);
 
     // 1 MB. Fits the largest buffer setting (250 ms) at 192 kHz, with room to spare.
     static constexpr int fifoSize = 1 << 17;
@@ -74,7 +81,8 @@ private:
     static constexpr double maxSpeedCorrection = 0.002;
     static constexpr double jitterMarginSamples = 32.0;
 
-    std::unique_ptr<juce::AudioIODeviceType> deviceType;
+    std::unique_ptr<juce::AudioIODeviceType> deviceType;         // low-latency mode; also lists devices
+    std::unique_ptr<juce::AudioIODeviceType> normalDeviceType;   // fallback, made only when needed
     std::unique_ptr<juce::AudioIODevice> device;
     juce::String openDeviceName;
     bool closingOnPurpose = false;      // message thread only
@@ -102,6 +110,9 @@ private:
     std::atomic<float> gain { 1.0f };
     std::atomic<int> dropouts { 0 };
     std::atomic<juce::uint32> lastPushTime { 0 };
+    std::atomic<double> averageFillSamples { 0.0 };
+    std::atomic<double> windowsOutputMs { 0.0 };
+    std::atomic<bool> lowLatencyActive { false };
     std::atomic<int> recentLowestMargin { INT_MAX };
     std::atomic<int> sessionLowestMargin { INT_MAX };
     std::atomic<juce::uint32> lastDropoutTime { 0 };

@@ -63,6 +63,25 @@ Key behaviour in the callback:
 - **Health**: the lowest margin (spare samples after a read) and dropouts are always measured.
   A dropout is counted only if the host pushed within the last 250 ms, so stopping the
   engine, exporting or bypassing the plugin is not reported as a dropout.
+- **Over-full drains slowly on purpose**: after a hiccup the FIFO may hold up to 4× the
+  target and drift correction drains it at 0.2% speed. The owner chose to keep this rather
+  than jump back (which would click).
+
+Device modes and delay readout:
+
+- `deviceType` is WASAPI **shared low-latency** (IAudioClient3); devices open with the
+  smallest buffer the driver allows. If that fails, `tryOpen` falls back to a lazily made
+  normal shared-mode type. `isLowLatencyMode()` is true only when the buffer really is
+  smaller than Windows' default.
+- Details shows "Delay of the copy now": the averaged FIFO fill (`getBufferedMs`) plus
+  JUCE's output latency for the device (`getWindowsOutputMs`). The cable and Discord add
+  their own delay after that.
+- Known timing issue: if the backing track plays in a **browser** while the guitar goes
+  through Ableton, Discord gets the browser audio directly and the guitar via the bridge,
+  so viewers hear the guitar late (~200 ms measured by the owner). Part of that is outside
+  the plugin (the owner plays along with browser audio they hear late through Windows).
+  The real fix is playing the track inside Ableton (the downloader + drag-to-track exists
+  for this).
 
 Reconnect (costs nothing in steady state):
 
@@ -202,14 +221,16 @@ There are no unit tests. Verify with:
 ## Decisions already made (don't re-propose)
 
 Rejected: fading the copy in and out, a send level meter, a "Discord can hear this"
-input check, warning about two plugin instances, protecting existing files from overwrite.
+input check, warning about two plugin instances, protecting existing files from overwrite,
+jumping back quickly when the FIFO is over-full.
 
 Accepted and implemented on branch `small-ffmpeg`: bundled small ffmpeg, auto-reconnect,
 reopen at the host rate, "Listen"/real-speaker warnings, always-on health line with
 Details, tooltips, 250 ms buffer cap, playlist → first video, inter-instance tool lock,
 work-folder cleanup, prompt cancel, drag-to-Ableton, Show in folder, conversion progress,
 auto-update-and-retry, FLAC, MP3 192 default, installer, Get VB-Cable button, README,
-version in the window, dropping `juce_audio_utils`, dead-code removal.
+version in the window, dropping `juce_audio_utils`, dead-code removal, the "Delay of the
+copy now" readout, WASAPI low-latency mode with fallback.
 
 ## Licensing
 
