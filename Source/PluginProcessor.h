@@ -2,6 +2,7 @@
 
 #include <juce_audio_processors/juce_audio_processors.h>
 
+#include "AudioDownloader.h"
 #include "BridgeOutput.h"
 
 class StreamBridgeProcessor final : public juce::AudioProcessor,
@@ -40,8 +41,14 @@ public:
     juce::String getSelectedOutputDevice() const;
     juce::String getStatusText() const;
 
+    juce::File getDownloadFolder() const;
+    void setDownloadFolder (const juce::File& folder);
+    int getDownloadFormat() const;
+    void setDownloadFormat (int formatIndex);
+
     juce::AudioProcessorValueTreeState parameters;
     BridgeOutput bridge;
+    AudioDownloader downloader;
 
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
@@ -55,6 +62,8 @@ private:
     mutable juce::CriticalSection deviceLock;
     juce::String selectedDevice;
     juce::String openError;
+    juce::File downloadFolder { juce::File::getSpecialLocation (juce::File::userMusicDirectory) };
+    int downloadFormat = 0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (StreamBridgeProcessor)
 };

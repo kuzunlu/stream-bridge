@@ -101,6 +101,49 @@ double BridgeOutput::getBufferedMs() const
     return fifo.getNumReady() * 1000.0 / hostSampleRate.load();
 }
 
+void BridgeOutput::setMonitoring (bool shouldMonitor)
+{
+    if (shouldMonitor && ! monitoring.load())
+    {
+        dropouts.store (0);
+        recentLowestMargin.store (INT_MAX);
+        sessionLowestMargin.store (INT_MAX);
+        lastDropoutTime.store (0);
+    }
+
+    monitoring.store (shouldMonitor);
+}
+
+std::optional<double> BridgeOutput::takeLowestMarginMs()
+{
+    const auto margin = recentLowestMargin.exchange (INT_MAX);
+
+    if (margin == INT_MAX)
+        return {};
+
+    return margin * 1000.0 / hostSampleRate.load();
+}
+
+std::optional<double> BridgeOutput::getSessionLowestMarginMs() const
+{
+    const auto margin = sessionLowestMargin.load();
+
+    if (margin == INT_MAX)
+        return {};
+
+    return margin * 1000.0 / hostSampleRate.load();
+}
+
+std::optional<double> BridgeOutput::getSecondsSinceLastDropout() const
+{
+    const auto time = lastDropoutTime.load();
+
+    if (time == 0)
+        return {};
+
+    return (juce::Time::getMillisecondCounter() - time) / 1000.0;
+}
+
 juce::String BridgeOutput::getLastError() const
 {
     const juce::ScopedLock sl (errorLock);
@@ -156,6 +199,7 @@ void BridgeOutput::audioDeviceIOCallbackWithContext (const float* const*,
     if (target != lastTarget)
     {
         lastTarget = target;
+        sessionLowestMargin.store (INT_MAX);    // the old margins belonged to the old buffer size
 
         if (ready < target)
         {
@@ -185,9 +229,26 @@ void BridgeOutput::audioDeviceIOCallbackWithContext (const float* const*,
     const auto ratio = baseRatio * (1.0 + maxSpeedCorrection * fillError);
     const auto needed = (int) std::ceil (ratio * numSamples) + 4;
 
+    // Tuning mode only: how much spare audio is left after this read.
+    if (monitoring.load())
+    {
+        const auto margin = ready - needed;
+
+        if (margin < recentLowestMargin.load())
+            recentLowestMargin.store (margin);
+
+        if (margin < sessionLowestMargin.load())
+            sessionLowestMargin.store (margin);
+    }
+
     if (needed > ready || needed > scratch.getNumSamples() || numSamples > rendered.getNumSamples())
     {
-        dropouts.fetch_add (1);
+        if (monitoring.load())
+        {
+            dropouts.fetch_add (1);
+            lastDropoutTime.store (juce::jmax ((juce::uint32) 1, juce::Time::getMillisecondCounter()));
+        }
+
         priming = true;
         return;
     }
@@ -232,7 +293,6 @@ void BridgeOutput::audioDeviceAboutToStart (juce::AudioIODevice* startingDevice)
     // Throw away any old audio left over from an earlier session.
     fifo.finishedRead (fifo.getNumReady());
     priming = true;
-    dropouts.store (0);
 
     {
         const juce::ScopedLock sl (errorLock);

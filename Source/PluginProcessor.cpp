@@ -18,6 +18,7 @@ StreamBridgeProcessor::StreamBridgeProcessor()
 StreamBridgeProcessor::~StreamBridgeProcessor()
 {
     cancelPendingUpdate();
+    downloader.cancel();
     bridge.closeDevice();
 }
 
@@ -74,6 +75,9 @@ void StreamBridgeProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
     auto state = parameters.copyState();
     state.setProperty ("outputDevice", getSelectedOutputDevice(), nullptr);
+    state.setProperty ("downloadFolder", getDownloadFolder().getFullPathName(), nullptr);
+    state.setProperty ("downloadFormat", getDownloadFormat(), nullptr);
+    state.setProperty ("bufferTuning", bridge.isMonitoring(), nullptr);
 
     if (const auto xml = state.createXml())
         copyXmlToBinary (*xml, destData);
@@ -92,7 +96,14 @@ void StreamBridgeProcessor::setStateInformation (const void* data, int sizeInByt
     {
         const juce::ScopedLock sl (deviceLock);
         selectedDevice = state.getProperty ("outputDevice").toString();
+
+        if (const auto folder = state.getProperty ("downloadFolder").toString(); juce::File::isAbsolutePath (folder))
+            downloadFolder = juce::File (folder);
+
+        downloadFormat = state.getProperty ("downloadFormat", 0);
     }
+
+    bridge.setMonitoring (state.getProperty ("bufferTuning", false));
 
     triggerAsyncUpdate();
 }
@@ -122,9 +133,13 @@ juce::String StreamBridgeProcessor::getStatusText() const
     {
         auto text = "Playing to " + bridge.getOpenDeviceName()
                   + "  |  " + juce::String (juce::roundToInt (bridge.getDeviceSampleRate())) + " Hz"
-                  + "  |  buffer " + juce::String (juce::roundToInt (bridge.getTargetMs())) + " ms"
-                  + " (lowest possible " + juce::String (juce::roundToInt (bridge.getMinimumMs())) + " ms)"
-                  + "  |  dropouts: " + juce::String (bridge.getDropoutCount());
+                  + "  |  buffer " + juce::String (juce::roundToInt (bridge.getTargetMs())) + " ms";
+
+        if (bridge.isMonitoring())
+            text << " (lowest possible " << juce::roundToInt (bridge.getMinimumMs()) << " ms)"
+                 << "  |  dropouts: " << bridge.getDropoutCount();
+        else
+            text << " (locked)";
 
         if (const auto error = bridge.getLastError(); error.isNotEmpty())
             text << "  |  " << error;
@@ -141,6 +156,30 @@ juce::String StreamBridgeProcessor::getStatusText() const
         return "No virtual cable found. Pick an output above.";
 
     return "Not running";
+}
+
+juce::File StreamBridgeProcessor::getDownloadFolder() const
+{
+    const juce::ScopedLock sl (deviceLock);
+    return downloadFolder;
+}
+
+void StreamBridgeProcessor::setDownloadFolder (const juce::File& folder)
+{
+    const juce::ScopedLock sl (deviceLock);
+    downloadFolder = folder;
+}
+
+int StreamBridgeProcessor::getDownloadFormat() const
+{
+    const juce::ScopedLock sl (deviceLock);
+    return downloadFormat;
+}
+
+void StreamBridgeProcessor::setDownloadFormat (int formatIndex)
+{
+    const juce::ScopedLock sl (deviceLock);
+    downloadFormat = formatIndex;
 }
 
 juce::String StreamBridgeProcessor::findVirtualCable()

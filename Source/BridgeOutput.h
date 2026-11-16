@@ -4,6 +4,8 @@
 
 #include <array>
 #include <atomic>
+#include <climits>
+#include <optional>
 
 // Sends a copy of the host's audio to a Windows (WASAPI shared mode) output device.
 //
@@ -31,6 +33,14 @@ public:
     void setEnabled (bool shouldBeEnabled)     { enabled.store (shouldBeEnabled); }
     void setGain (float newGain)               { gain.store (newGain); }
     void push (const juce::AudioBuffer<float>& buffer);
+
+    // Buffer tuning mode. While it is on, the output side measures how close it gets to
+    // a dropout and counts dropouts. While it is off, none of this is measured.
+    void setMonitoring (bool shouldMonitor);
+    bool isMonitoring() const                  { return monitoring.load(); }
+    std::optional<double> takeLowestMarginMs();             // lowest since the last call
+    std::optional<double> getSessionLowestMarginMs() const; // lowest since tuning started
+    std::optional<double> getSecondsSinceLastDropout() const;
 
     // Any thread.
     bool isRunning() const                     { return running.load(); }
@@ -80,6 +90,10 @@ private:
     std::atomic<bool> running { false };
     std::atomic<float> gain { 1.0f };
     std::atomic<int> dropouts { 0 };
+    std::atomic<bool> monitoring { false };
+    std::atomic<int> recentLowestMargin { INT_MAX };
+    std::atomic<int> sessionLowestMargin { INT_MAX };
+    std::atomic<juce::uint32> lastDropoutTime { 0 };
 
     mutable juce::CriticalSection errorLock;
     juce::String lastError;

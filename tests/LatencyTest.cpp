@@ -125,6 +125,7 @@ int main (int argc, char* argv[])
 
     StreamBridgeProcessor processor;
     processor.prepareToPlay (testSampleRate, testBlockSize);
+    processor.bridge.setMonitoring (true);    // tuning mode, so dropouts are counted
 
     // -60 dB is the lowest volume and means silence, so the cable only gets silence.
     processor.parameters.getParameter ("gain")->setValueNotifyingHost (0.0f);
@@ -172,6 +173,9 @@ int main (int argc, char* argv[])
 
     const auto sendOn = runLikeAbleton (processor, noise, 10.0);
     std::printf ("Discord side after 10 s: %s\n", processor.getStatusText().toRawUTF8());
+
+    if (const auto margin = processor.bridge.getSessionLowestMarginMs())
+        std::printf ("Lowest safety margin: %.1f ms\n", *margin);
     std::printf ("Memory added by the plugin (running): %.2f MB\n\n", getPrivateMemoryMB() - memoryBefore);
 
     processor.parameters.getParameter ("enabled")->setValueNotifyingHost (0.0f);

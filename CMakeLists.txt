@@ -22,6 +22,7 @@ juce_add_plugin(StreamBridge
 
 target_sources(StreamBridge
     PRIVATE
+        Source/AudioDownloader.cpp
         Source/BridgeOutput.cpp
         Source/PluginEditor.cpp
         Source/PluginProcessor.cpp)
@@ -35,6 +36,7 @@ target_compile_definitions(StreamBridge
 target_link_libraries(StreamBridge
     PRIVATE
         juce::juce_audio_utils
+        juce::juce_cryptography
     PUBLIC
         juce::juce_recommended_config_flags
         juce::juce_recommended_lto_flags
@@ -46,6 +48,7 @@ juce_add_console_app(LatencyTest
 
 target_sources(LatencyTest
     PRIVATE
+        Source/AudioDownloader.cpp
         Source/BridgeOutput.cpp
         Source/PluginEditor.cpp
         Source/PluginProcessor.cpp
@@ -60,5 +63,27 @@ target_compile_definitions(LatencyTest
 target_link_libraries(LatencyTest
     PRIVATE
         juce::juce_audio_utils
+        juce::juce_cryptography
+        juce::juce_recommended_config_flags
+        juce::juce_recommended_warning_flags)
+
+# Test program: runs the YouTube downloader without a DAW.
+juce_add_console_app(DownloadTest
+    PRODUCT_NAME "Download Test")
+
+target_sources(DownloadTest
+    PRIVATE
+        Source/AudioDownloader.cpp
+        tests/DownloadTest.cpp)
+
+target_compile_definitions(DownloadTest
+    PRIVATE
+        JUCE_WEB_BROWSER=0
+        JUCE_USE_CURL=0)
+
+target_link_libraries(DownloadTest
+    PRIVATE
+        juce::juce_core
+        juce::juce_cryptography
         juce::juce_recommended_config_flags
         juce::juce_recommended_warning_flags)
