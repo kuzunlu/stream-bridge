@@ -8,8 +8,9 @@
 //
 // The work is done by three free tools that run as separate programs, so nothing here
 // can disturb the audio: yt-dlp (downloads), ffmpeg (converts) and QuickJS (lets yt-dlp
-// read YouTube's pages). They are downloaded the first time they are needed, and each
-// download is checked against a pinned SHA-256 checksum before it is used.
+// read YouTube's pages). A small ffmpeg ships inside the plugin. The other two are
+// downloaded the first time they are needed, and each download is checked against a
+// pinned SHA-256 checksum before it is used.
 class AudioDownloader : private juce::Thread
 {
 public:
@@ -38,8 +39,8 @@ private:
     void removeOldTools();
     bool installTool (const Tool& tool);
     bool downloadFile (const juce::String& url, const juce::File& target, const juce::String& toolName);
-    juce::File getToolFile (const Tool& tool, const char* fileName) const;
-    int runTool (const Tool& tool, const juce::StringArray& arguments);
+    juce::File getToolFile (const Tool& tool) const;
+    int runTool (const juce::File& program, const juce::String& name, const juce::StringArray& arguments);
     void handleOutputLine (const juce::String& line);
     void setStatus (const juce::String& newStatus);
 

@@ -87,3 +87,24 @@ target_link_libraries(DownloadTest
         juce::juce_cryptography
         juce::juce_recommended_config_flags
         juce::juce_recommended_warning_flags)
+
+# The small ffmpeg for the YouTube downloader, made by ffmpeg/build.sh (build.bat runs it).
+# It goes into Stream Bridge.vst3/Contents/Resources, and next to DownloadTest.exe.
+set(STREAM_BRIDGE_FFMPEG_DIR "${CMAKE_BINARY_DIR}/ffmpeg" CACHE PATH "Folder with the ffmpeg.exe made by ffmpeg/build.sh")
+
+if(EXISTS "${STREAM_BRIDGE_FFMPEG_DIR}/ffmpeg.exe")
+    set(ffmpegFiles
+        "${STREAM_BRIDGE_FFMPEG_DIR}/ffmpeg.exe"
+        "${STREAM_BRIDGE_FFMPEG_DIR}/ffmpeg-LICENSE.txt"
+        "${STREAM_BRIDGE_FFMPEG_DIR}/ffmpeg-README.txt")
+
+    add_custom_command(TARGET StreamBridge_VST3 POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:StreamBridge_VST3>/../Resources"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different ${ffmpegFiles} "$<TARGET_FILE_DIR:StreamBridge_VST3>/../Resources")
+
+    add_custom_command(TARGET DownloadTest POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${STREAM_BRIDGE_FFMPEG_DIR}/ffmpeg.exe" "$<TARGET_FILE_DIR:DownloadTest>")
+else()
+    message(WARNING "ffmpeg.exe not found in ${STREAM_BRIDGE_FFMPEG_DIR}. The plugin will build, "
+                    "but its YouTube downloader cannot convert. Run ffmpeg/build.sh in MSYS2 first.")
+endif()

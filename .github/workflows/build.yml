@@ -18,9 +18,29 @@ jobs:
         with:
           submodules: true
 
+      # The small ffmpeg (ffmpeg/build.sh) takes a few minutes, so keep it until the script changes.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: ffmpeg-cache
+        with:
+          path: |
+            build/ffmpeg/ffmpeg.exe
+            build/ffmpeg/ffmpeg-LICENSE.txt
+            build/ffmpeg/ffmpeg-README.txt
+          key: ffmpeg-${{ hashFiles('ffmpeg/build.sh') }}
+
+      - name: Install the MSYS2 compiler for ffmpeg
+        if: steps.ffmpeg-cache.outputs.cache-hit != 'true'
+        shell: cmd
+        run: C:\msys64\usr\bin\bash.exe -lc "pacman -S --needed --noconfirm mingw-w64-ucrt-x86_64-gcc make diffutils"
+
       - name: Build
         shell: cmd
         run: build.bat
+
+      - name: Check that ffmpeg is in the plugin
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "build/StreamBridge_artefacts/Release/VST3/Stream Bridge.vst3/Contents/Resources/ffmpeg.exe")) { throw "ffmpeg.exe is missing from the plugin" }
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

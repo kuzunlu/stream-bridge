@@ -3,40 +3,49 @@
 #include <juce_cryptography/juce_cryptography.h>
 
 // Pinned tool versions. The folder name holds the version, so changing a version here
-// makes the plugin download the new one next time.
+// makes the plugin download the new one next time. ffmpeg is not here: a small build of
+// it ships inside the plugin (see ffmpeg/build.sh).
 struct AudioDownloader::Tool
 {
     const char* name;
     const char* folder;
     const char* url;
     const char* sha256;
-    bool isZip;
-    const char* files[2];
+    const char* file;
 };
 
 namespace
 {
-    constexpr int ytDlp = 0, ffmpeg = 1, quickJs = 2;
+    constexpr int ytDlp = 0, quickJs = 1;
 
     const AudioDownloader::Tool tools[] =
     {
         { "yt-dlp", "yt-dlp-2026.10.26",
           "https://github.com/yt-dlp/yt-dlp/releases/download/2026.10.26/yt-dlp.exe",
           "f5389d3698ecde4ef06f4e6b1ce0294fe9ac1396228c8990b8d3416d6d177a7d",
-          false, { "yt-dlp.exe", nullptr } },
-
-        { "ffmpeg", "ffmpeg-9.0.2",
-          "https://github.com/GyanD/codexffmpeg/releases/download/9.0.2/ffmpeg-9.0.2-essentials_build.zip",
-          "60f467265b1e312373dbcd92200c2618a74850f98d3d078e94296bb3fa2047ba",
-          true, { "ffmpeg.exe", nullptr } },
+          "yt-dlp.exe" },
 
         // A small JavaScript runtime. yt-dlp needs one to read YouTube's pages, and it
         // finds QuickJS by the file name qjs.exe.
         { "QuickJS", "quickjs-ng-0.18.0",
           "https://github.com/quickjs-ng/quickjs/releases/download/v0.18.0/qjs-windows-x86_64.exe",
           "ff03398d74ea6e6bd3a8e58058f7003225abcac229d7d57775b7aaae812a49c7",
-          false, { "qjs.exe", nullptr } },
+          "qjs.exe" },
     };
+
+    // In the plugin this is Stream Bridge.vst3/Contents/Resources/ffmpeg.exe. The test
+    // programs have it next to their .exe.
+    juce::File findFfmpeg()
+    {
+        const auto module = juce::File::getSpecialLocation (juce::File::currentExecutableFile);
+
+        for (const auto& file : { module.getParentDirectory().getSiblingFile ("Resources").getChildFile ("ffmpeg.exe"),
+                                  module.getSiblingFile ("ffmpeg.exe") })
+            if (file.existsAsFile())
+                return file;
+
+        return {};
+    }
 
     juce::String megabytes (juce::int64 bytes)
     {
@@ -124,9 +133,9 @@ void AudioDownloader::setStatus (const juce::String& newStatus)
     status = newStatus;
 }
 
-juce::File AudioDownloader::getToolFile (const Tool& tool, const char* fileName) const
+juce::File AudioDownloader::getToolFile (const Tool& tool) const
 {
-    return toolsFolder.getChildFile (tool.folder).getChildFile (fileName);
+    return toolsFolder.getChildFile (tool.folder).getChildFile (tool.file);
 }
 
 void AudioDownloader::removeOldTools()
@@ -146,7 +155,7 @@ void AudioDownloader::removeOldTools()
         }
 
         for (const auto& file : folder.findChildFiles (juce::File::findFiles, false))
-            if (file.getFileName() != match->files[0] && file.getFileName() != juce::String (match->files[1]))
+            if (file.getFileName() != match->file)
                 file.deleteFile();
     }
 }
@@ -154,6 +163,15 @@ void AudioDownloader::removeOldTools()
 void AudioDownloader::run()
 {
     removeOldTools();
+
+    const auto ffmpeg = findFfmpeg();
+
+    if (job == Job::download && ! ffmpeg.existsAsFile())
+    {
+        setStatus ("ffmpeg.exe is missing from the plugin folder. Install Stream Bridge again.");
+        progress.store (0.0);
+        return;
+    }
 
     for (const auto& tool : tools)
     {
@@ -172,19 +190,20 @@ void AudioDownloader::run()
 
     if (job == Job::update)
     {
-        const auto exitCode = runTool (tools[ytDlp], { "-U" });
+        const auto exitCode = runTool (getToolFile (tools[ytDlp]), tools[ytDlp].name, { "-U" });
         setStatus (cancelled.load() ? "Cancelled." : exitCode == 0 ? lastLine : "Update failed: " + lastLine);
         progress.store (exitCode == 0 ? 1.0 : 0.0);
         return;
     }
 
     // Step 1: yt-dlp downloads the best audio stream, unchanged, into a private work folder.
+    // No fixups: the small ffmpeg cannot remux, and step 2 re-encodes the file anyway.
     const auto workFolder = toolsFolder.getSiblingFile ("work").getChildFile (juce::Uuid().toString());
     workFolder.createDirectory();
 
     juce::StringArray arguments { "--no-playlist", "--newline", "--progress", "--encoding", "utf-8",
-                                  "--ffmpeg-location", toolsFolder.getChildFile (tools[ffmpeg].folder).getFullPathName(),
-                                  "--no-js-runtimes", "--js-runtimes", "quickjs:" + getToolFile (tools[quickJs], "qjs.exe").getFullPathName(),
+                                  "--ffmpeg-location", ffmpeg.getFullPathName(), "--fixup", "never",
+                                  "--no-js-runtimes", "--js-runtimes", "quickjs:" + getToolFile (tools[quickJs]).getFullPathName(),
                                   "-f", "bestaudio/best",
                                   "-o", workFolder.getChildFile ("%(title)s.%(ext)s").getFullPathName(),
                                   "--print", "after_move:SAVED|%(filepath)s",
@@ -193,7 +212,7 @@ void AudioDownloader::run()
     setStatus ("Reading the YouTube page...");
     progress.store (-1.0);
 
-    const auto downloadExitCode = runTool (tools[ytDlp], arguments);
+    const auto downloadExitCode = runTool (getToolFile (tools[ytDlp]), tools[ytDlp].name, arguments);
 
     if (cancelled.load() || downloadExitCode != 0 || savedFile.isEmpty())
     {
@@ -223,7 +242,7 @@ void AudioDownloader::run()
     setStatus (isWav ? "Converting to WAV..." : "Converting to MP3...");
     progress.store (-1.0);
 
-    const auto convertExitCode = runTool (tools[ffmpeg], conversion);
+    const auto convertExitCode = runTool (ffmpeg, "ffmpeg", conversion);
     workFolder.deleteRecursively();
 
     if (cancelled.load())
@@ -246,16 +265,7 @@ void AudioDownloader::run()
 
 bool AudioDownloader::installTool (const Tool& tool)
 {
-    const auto isInstalled = [&]
-    {
-        for (const auto* fileName : tool.files)
-            if (fileName != nullptr && ! getToolFile (tool, fileName).existsAsFile())
-                return false;
-
-        return true;
-    };
-
-    if (isInstalled())
+    if (getToolFile (tool).existsAsFile())
         return true;
 
     const auto folder = toolsFolder.getChildFile (tool.folder);
@@ -284,57 +294,7 @@ bool AudioDownloader::installTool (const Tool& tool)
         return false;
     }
 
-    if (! tool.isZip)
-        return download.moveFileTo (getToolFile (tool, tool.files[0]));
-
-    setStatus ("Unpacking " + juce::String (tool.name) + "...");
-
-    {
-        juce::ZipFile zip (download);
-
-        for (const auto* fileName : tool.files)
-        {
-            if (fileName == nullptr)
-                continue;
-
-            int entryIndex = -1;
-
-            for (int i = 0; i < zip.getNumEntries(); ++i)
-            {
-                const auto entryName = zip.getEntry (i)->filename.replaceCharacter ('\\', '/');
-
-                if (entryName == fileName || entryName.endsWith (juce::String ("/") + fileName))
-                    entryIndex = i;
-            }
-
-            const auto target = getToolFile (tool, fileName);
-            const auto part = target.withFileExtension (".part");
-            const std::unique_ptr<juce::InputStream> in (entryIndex >= 0 ? zip.createStreamForEntry (entryIndex) : nullptr);
-
-            if (in == nullptr)
-            {
-                setStatus (juce::String (fileName) + " was not found in the " + tool.name + " download.");
-                return false;
-            }
-
-            part.deleteFile();
-
-            {
-                juce::FileOutputStream out (part);
-
-                if (out.failedToOpen() || out.writeFromInputStream (*in, -1) <= 0)
-                {
-                    setStatus ("Could not unpack " + juce::String (fileName));
-                    return false;
-                }
-            }
-
-            part.moveFileTo (target);
-        }
-    }
-
-    download.deleteFile();
-    return isInstalled();
+    return download.moveFileTo (getToolFile (tool));
 }
 
 bool AudioDownloader::downloadFile (const juce::String& url, const juce::File& target, const juce::String& toolName)
@@ -387,9 +347,9 @@ bool AudioDownloader::downloadFile (const juce::String& url, const juce::File& t
     return total <= 0 || done == total;
 }
 
-int AudioDownloader::runTool (const Tool& tool, const juce::StringArray& arguments)
+int AudioDownloader::runTool (const juce::File& program, const juce::String& name, const juce::StringArray& arguments)
 {
-    juce::StringArray command { getToolFile (tool, tool.files[0]).getFullPathName() };
+    juce::StringArray command { program.getFullPathName() };
     command.addArray (arguments);
 
     {
@@ -399,7 +359,7 @@ int AudioDownloader::runTool (const Tool& tool, const juce::StringArray& argumen
         if (cancelled.load() || ! process->start (command))
         {
             process.reset();
-            lastLine = "Could not start " + juce::String (tool.name) + ".";
+            lastLine = "Could not start " + name + ".";
             return -1;
         }
     }

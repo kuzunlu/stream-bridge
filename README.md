@@ -40,6 +40,16 @@ as **Stream-Bridge-VST3** under *Artifacts*.
 Needs Visual Studio or the free Build Tools for Visual Studio, with
 "Desktop development with C++".
 
+The YouTube downloader uses a small ffmpeg (about 2 MB) that ships inside the plugin.
+`build.bat` builds it the first time, which needs [MSYS2](https://www.msys2.org) in `C:\msys64`
+with its compiler. Install that once from an MSYS2 terminal:
+
+```
+pacman -S --needed mingw-w64-ucrt-x86_64-gcc make diffutils
+```
+
+Then:
+
 ```
 git clone --recursive https://github.com/kuzunlu/stream-bridge.git
 cd stream-bridge
