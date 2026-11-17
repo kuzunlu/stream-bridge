@@ -46,8 +46,8 @@ StreamBridgeEditor::StreamBridgeEditor (StreamBridgeProcessor& p)
 {
     for (auto* c : std::initializer_list<juce::Component*> { &deviceLabel, &deviceBox, &refreshButton,
                                                              &enabledButton, &gainLabel, &gainSlider,
-                                                             &bufferLabel, &bufferSlider, &detailsButton,
-                                                             &healthLabel, &marginLabel, &adviceLabel, &delayLabel,
+                                                             &bufferLabel, &bufferSlider,
+                                                             &healthLabel, &adviceLabel, &totalLabel, &delayLabel,
                                                              &statusLabel, &warningLabel, &getCableButton,
                                                              &downloadHeading, &versionLabel, &linkLabel, &linkEditor,
                                                              &folderLabel, &folderPath, &folderButton,
@@ -81,26 +81,21 @@ StreamBridgeEditor::StreamBridgeEditor (StreamBridgeProcessor& p)
     gainSlider.setTextValueSuffix (" dB");
     bufferSlider.setTextValueSuffix (" ms");
 
-    detailsButton.setClickingTogglesState (true);
-    detailsButton.onClick = [this]
-    {
-        recentMargins.fill ({});
-        timerCallback();
-        updateLayout();
-    };
-
-    for (auto* label : { &healthLabel, &marginLabel, &adviceLabel, &delayLabel, &statusLabel })
+    for (auto* label : { &healthLabel, &adviceLabel, &totalLabel, &delayLabel, &statusLabel })
     {
         label->setJustificationType (juce::Justification::topLeft);
         label->setMinimumHorizontalScale (1.0f);
     }
 
+    // The line that says whether the stream is stable stands out.
+    healthLabel.setFont (juce::FontOptions (17.0f, juce::Font::bold));
+    adviceLabel.setFont (juce::FontOptions (15.0f, juce::Font::bold));
+
     warningLabel.setJustificationType (juce::Justification::topLeft);
     warningLabel.setColour (juce::Label::textColourId, juce::Colours::orange);
 
     // Shown only when needed (see updateLayout).
-    for (auto* c : std::initializer_list<juce::Component*> { &marginLabel, &adviceLabel, &delayLabel, &warningLabel, &getCableButton,
-                                                             &savedFileLabel, &showButton })
+    for (auto* c : std::initializer_list<juce::Component*> { &warningLabel, &getCableButton, &savedFileLabel, &showButton })
         c->setVisible (false);
     getCableButton.onClick = [] { juce::URL ("https://vb-audio.com/Cable/").launchInDefaultBrowser(); };
 
@@ -153,12 +148,18 @@ StreamBridgeEditor::StreamBridgeEditor (StreamBridgeProcessor& p)
                           "You should not hear this output yourself.");
     refreshButton.setTooltip ("Look for outputs again, for example after installing a virtual cable. "
                               "Also reconnects if the output stopped.");
-    enabledButton.setTooltip ("On: viewers hear your DAW. Off: they hear nothing. Your own sound never changes.");
+    enabledButton.setTooltip ("On: viewers hear your DAW. Off: they hear nothing. Your own sound never changes. "
+                              "Put Stream Bridge last on the Master channel, so viewers also hear the effects before it.");
     gainSlider.setTooltip ("Volume of the copy only. Your own sound does not change.");
     bufferSlider.setTooltip ("How far behind the copy plays, so timing hiccups do not cause gaps. "
                              "Larger is safer, smaller has less delay for viewers. Your own sound is never delayed.");
-    detailsButton.setTooltip ("Show the measurements behind the stream status.");
-    healthLabel.setTooltip ("Whether viewers get the sound without gaps. A dropout is a short gap they hear.");
+    healthLabel.setTooltip ("Spare audio is how much sound is still waiting each time Windows asks for more. "
+                            "If it runs out, viewers hear a short gap (a dropout). This judges the last 10 seconds, "
+                            "so play the way you will on stream while you watch it.");
+    adviceLabel.setTooltip ("The Stream buffer that keeps at least 3 ms of spare audio, based on the last 10 seconds.");
+    totalLabel.setTooltip ("Dropouts since you last changed the Stream buffer. Restarts and reconnects do not reset this.");
+    delayLabel.setTooltip ("How far behind your own sound the copy is when it leaves this plugin. "
+                           "The cable and Discord add their own delay after that.");
     statusLabel.setTooltip ("The output the copy goes to, its sample rate, and the stream buffer in use.");
     getCableButton.setTooltip ("Opens the VB-Audio website, where VB-Cable is free to download.");
     linkEditor.setTooltip ("A YouTube link. For a playlist link, only its first video is saved.");
@@ -172,6 +173,7 @@ StreamBridgeEditor::StreamBridgeEditor (StreamBridgeProcessor& p)
 
     bridgeProcessor.checkWindowsSettings();
     refreshDeviceList();
+    bridgeProcessor.bridge.takeLowestMarginMs();    // forget what happened while the window was closed
     timerCallback();
     startTimerHz (4);
 
@@ -221,8 +223,13 @@ void StreamBridgeEditor::timerCallback()
         refreshDeviceList();
     }
 
-    statusLabel.setText (bridgeProcessor.getStatusText(), juce::dontSendNotification);
-    updateHealth();
+    // The stream lines change once per second. The downloader below keeps the faster timer.
+    if (timerTicks++ % 4 == 0)
+    {
+        statusLabel.setText (bridgeProcessor.getStatusText(), juce::dontSendNotification);
+        updateHealth();
+    }
+
     updateWarning();
 
     const auto& downloader = bridgeProcessor.downloader;
@@ -236,13 +243,20 @@ void StreamBridgeEditor::timerCallback()
     updateSavedFile();
 }
 
+void StreamBridgeEditor::clearHealthHistory()
+{
+    recentMargins.fill ({});
+    recentDropouts.fill (0);
+    nextSecond = 0;
+    secondsMeasured = 0;
+    lastDropoutCount = bridgeProcessor.bridge.getDropoutCount();
+    bridgeProcessor.bridge.takeLowestMarginMs();
+}
+
+// Called once per second.
 void StreamBridgeEditor::updateHealth()
 {
     auto& bridge = bridgeProcessor.bridge;
-    const auto details = detailsButton.getToggleState();
-
-    recentMargins[nextMargin] = bridge.takeLowestMarginMs();
-    nextMargin = (nextMargin + 1) % recentMargins.size();
 
     const auto setLine = [] (juce::Label& label, const juce::String& text, juce::Colour colour)
     {
@@ -251,74 +265,129 @@ void StreamBridgeEditor::updateHealth()
     };
 
     const auto green = juce::Colours::limegreen, orange = juce::Colours::orange, red = juce::Colours::red, grey = juce::Colours::grey;
+    const auto textColour = getLookAndFeel().findColour (juce::Label::textColourId);
+
+    const auto showOnly = [&] (const juce::String& text)
+    {
+        setLine (healthLabel, text, grey);
+        setLine (adviceLabel, {}, grey);
+        setLine (totalLabel, {}, grey);
+        setLine (delayLabel, {}, grey);
+        bufferLabel.setColour (juce::Label::textColourId, textColour);
+        historyTarget = -1.0;
+    };
 
     if (! bridge.isRunning())
-    {
-        setLine (healthLabel, {}, grey);
-        setLine (marginLabel, {}, grey);
-        setLine (adviceLabel, {}, grey);
-        setLine (delayLabel, {}, grey);
-        return;
-    }
+        return showOnly ({});
 
     if (bridgeProcessor.parameters.getRawParameterValue ("enabled")->load() < 0.5f)
+        return showOnly ("Send audio is off, so viewers hear nothing.");
+
+    // Add this second to the last 10. Changing the Stream buffer starts the count over.
+    const auto target = bridge.getTargetMs();
+    const auto setting = (double) bridgeProcessor.parameters.getRawParameterValue ("bufferMs")->load();
+    const auto dropoutCount = bridge.getDropoutCount();
+
+    if (setting != historyTarget || dropoutCount < lastDropoutCount)
     {
-        setLine (healthLabel, "Send audio is off, so viewers hear nothing.", grey);
-        setLine (marginLabel, {}, grey);
-        setLine (adviceLabel, {}, grey);
-        setLine (delayLabel, {}, grey);
-        return;
+        historyTarget = setting;
+        clearHealthHistory();
+    }
+    else
+    {
+        recentMargins[nextSecond] = bridge.takeLowestMarginMs();
+        recentDropouts[nextSecond] = dropoutCount - lastDropoutCount;
+        lastDropoutCount = dropoutCount;
+        nextSecond = (nextSecond + 1) % historySize;
+        secondsMeasured = juce::jmin (secondsMeasured + 1, historySize);
     }
 
-    // The buffer that would have left 2 ms to spare at the worst moment so far.
-    std::optional<int> suggested;
+    std::optional<double> lowest;
+    int dropouts = 0;
 
-    if (const auto lowest = bridge.getSessionLowestMarginMs())
-        suggested = (int) std::ceil (juce::jmax (bridge.getMinimumMs(), bridge.getTargetMs() - *lowest + 2.0));
+    for (size_t i = 0; i < historySize; ++i)
+    {
+        dropouts += recentDropouts[i];
 
-    const auto dropouts = bridge.getDropoutCount();
-    const auto sinceDropout = bridge.getSecondsSinceLastDropout();
-    const auto raise = suggested.has_value() && *suggested > juce::roundToInt (bridge.getTargetMs())
-                         ? " Set the buffer to about " + juce::String (*suggested) + " ms."
-                         : juce::String();
+        if (recentMargins[i].has_value() && (! lowest.has_value() || *recentMargins[i] < *lowest))
+            lowest = recentMargins[i];
+    }
 
-    if (dropouts == 0)
-        setLine (healthLabel, "Stream OK, no dropouts.", green);
-    else if (sinceDropout.has_value() && *sinceDropout < 10.0)
-        setLine (healthLabel, "Dropout just now: viewers heard a short gap." + raise, red);
+    const auto window = secondsMeasured >= historySize ? juce::String ("last 10 seconds")
+                                                       : "last " + describeDuration ((double) secondsMeasured);
+    const auto current = juce::roundToInt (target);
+    const auto minimum = (int) std::ceil (bridge.getMinimumMs());
+
+    if (! lowest.has_value())
+    {
+        setLine (healthLabel, "Measuring the stream...", grey);
+        setLine (adviceLabel, "What to do: play something and wait 10 seconds.", grey);
+        bufferLabel.setColour (juce::Label::textColourId, textColour);
+    }
     else
-        setLine (healthLabel, juce::String (dropouts) + (dropouts == 1 ? " dropout" : " dropouts") + ", the last one "
-                                  + describeDuration (sinceDropout.value_or (0.0)) + " ago." + raise, orange);
+    {
+        // The buffer that would have kept 3 ms of spare audio at the worst moment.
+        const auto keepsThreeMs = juce::jmax (minimum, (int) std::ceil (target - *lowest + 3.0));
+        const auto raiseTo = juce::jmax (keepsThreeMs, current + 1);
+        const auto spare = juce::String (*lowest, 1) + " ms of spare audio (" + window + ").";
+        const auto raise = "What to do: raise the Stream buffer to " + juce::String (raiseTo) + " ms.";
 
-    if (! details)
-        return;
+        if (dropouts > 0)
+        {
+            setLine (healthLabel, "Gaps: " + juce::String (dropouts) + (dropouts == 1 ? " dropout" : " dropouts")
+                                      + " in the " + window + ". Viewers heard short gaps.", red);
+            setLine (adviceLabel, raise, red);
+            bufferLabel.setColour (juce::Label::textColourId, red);
+        }
+        else if (*lowest < 1.0)
+        {
+            setLine (healthLabel, "Almost a gap: only " + spare, red);
+            setLine (adviceLabel, raise, red);
+            bufferLabel.setColour (juce::Label::textColourId, red);
+        }
+        else if (*lowest < 3.0)
+        {
+            setLine (healthLabel, "Close to gaps: only " + spare, orange);
+            setLine (adviceLabel, raise, orange);
+            bufferLabel.setColour (juce::Label::textColourId, orange);
+        }
+        else
+        {
+            // Suggest a lower buffer only after a full 10 seconds of measuring, and never after
+            // a dropout at this buffer value: whatever caused it can happen again.
+            const auto canLower = secondsMeasured >= historySize && keepsThreeMs < current && bridge.getDropoutCount() == 0;
 
-    std::optional<double> recentLowest;
+            const auto advice = secondsMeasured < historySize ? juce::String ("What to do: keep playing, the full check takes 10 seconds.")
+                              : canLower                      ? "What to do: nothing. For less delay you can lower the Stream buffer to "
+                                                                    + juce::String (keepsThreeMs) + " ms."
+                                                              : juce::String ("What to do: nothing.");
 
-    for (const auto& margin : recentMargins)
-        if (margin.has_value() && (! recentLowest.has_value() || *margin < *recentLowest))
-            recentLowest = margin;
+            setLine (healthLabel, "Stream stable: " + spare, green);
+            setLine (adviceLabel, advice, green);
+            bufferLabel.setColour (juce::Label::textColourId, textColour);
+        }
+    }
 
-    if (! recentLowest.has_value())
-        setLine (marginLabel, "Safety margin: waiting for audio...", grey);
+    // Everything since the Stream buffer was last changed.
+    const auto totalDropouts = bridge.getDropoutCount();
+    juce::String total ("Since the Stream buffer was last changed: ");
+
+    if (totalDropouts == 0)
+        total << "no dropouts.";
     else
-        setLine (marginLabel, "Safety margin (last 2 seconds): " + juce::String (*recentLowest, 1) + " ms",
-                 *recentLowest >= 3.0 ? green : *recentLowest >= 1.0 ? orange : red);
+        total << totalDropouts << (totalDropouts == 1 ? " dropout" : " dropouts") << ", the last one "
+              << describeDuration (bridge.getSecondsSinceLastDropout().value_or (0.0)) << " ago.";
 
-    auto advice = "Lowest possible buffer: " + juce::String (juce::roundToInt (std::ceil (bridge.getMinimumMs()))) + " ms";
-
-    if (suggested.has_value())
-        advice << "   Suggested so far: " << *suggested << " ms";
-
-    setLine (adviceLabel, advice, getLookAndFeel().findColour (juce::Label::textColourId));
+    total << "\nLowest possible buffer: " << minimum << " ms";
+    setLine (totalLabel, total, textColour);
 
     // What the plugin itself adds to the copy right now. The cable and Discord add theirs after it.
     const auto pluginMs = bridge.getBufferedMs();
     const auto windowsMs = bridge.getWindowsOutputMs();
-    setLine (delayLabel, "Delay of the copy now: about " + juce::String (juce::roundToInt (pluginMs + windowsMs)) + " ms ("
-                             + juce::String (juce::roundToInt (pluginMs)) + " plugin + " + juce::String (juce::roundToInt (windowsMs))
-                             + " Windows, " + (bridge.isLowLatencyMode() ? "low-latency mode)" : "normal mode)"),
-             getLookAndFeel().findColour (juce::Label::textColourId));
+    setLine (delayLabel, "Copy delay now: about " + juce::String (juce::roundToInt (pluginMs + windowsMs)) + " ms (plugin "
+                             + juce::String (juce::roundToInt (pluginMs)) + " + Windows " + juce::String (juce::roundToInt (windowsMs))
+                             + ", " + (bridge.isLowLatencyMode() ? "low-latency mode)" : "normal mode)"),
+             textColour);
 }
 
 void StreamBridgeEditor::updateWarning()
@@ -355,10 +424,6 @@ void StreamBridgeEditor::updateSavedFile()
 
 void StreamBridgeEditor::updateLayout()
 {
-    marginLabel.setVisible (detailsButton.getToggleState());
-    adviceLabel.setVisible (detailsButton.getToggleState());
-    delayLabel.setVisible (detailsButton.getToggleState());
-
     if (const auto height = layOut (false); height != getHeight())
         setSize (editorWidth, height);
     else
@@ -403,27 +468,30 @@ int StreamBridgeEditor::layOut (bool apply)
     area.removeFromTop (10);
     row = area.removeFromTop (28);
     place (bufferLabel, row.removeFromLeft (120));
-    place (detailsButton, row.removeFromRight (70));
-    row.removeFromRight (8);
     place (bufferSlider, row);
 
-    area.removeFromTop (6);
-    place (healthLabel, area.removeFromTop (36));
-
-    if (detailsButton.getToggleState())
-    {
-        place (marginLabel, area.removeFromTop (20));
-        place (adviceLabel, area.removeFromTop (20));
-        place (delayLabel, area.removeFromTop (20));
-    }
+    area.removeFromTop (8);
+    place (healthLabel, area.removeFromTop (44));
+    place (adviceLabel, area.removeFromTop (38));
+    area.removeFromTop (4);
+    place (totalLabel, area.removeFromTop (56));
+    place (delayLabel, area.removeFromTop (20));
 
     area.removeFromTop (4);
     place (statusLabel, area.removeFromTop (36));
 
     if (warningLabel.isVisible() || getCableButton.isVisible())
     {
+        // Tall enough for the whole warning, so long ones are never squeezed or cut off.
+        juce::AttributedString text (warningLabel.getText());
+        text.setFont (warningLabel.getFont());
+        juce::TextLayout textLayout;
+        textLayout.createLayout (text, (float) (area.getWidth() - (getCableButton.isVisible() ? 108 : 0)
+                                                - warningLabel.getBorderSize().getLeftAndRight()));
+
         area.removeFromTop (4);
-        row = area.removeFromTop (52);
+        row = area.removeFromTop (juce::jmax (28, (int) std::ceil (textLayout.getHeight())
+                                                      + warningLabel.getBorderSize().getTopAndBottom() + 4));
 
         if (getCableButton.isVisible())
         {

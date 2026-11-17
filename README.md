@@ -5,7 +5,8 @@ audio to a Windows output device (for example a virtual cable), so Discord scree
 can hear a DAW that uses an ASIO interface.
 
 - Your own sound is not delayed or changed. The plugin reports 0 latency.
-- Only the copy is delayed, by about 40 ms.
+- Only the copy is delayed, by the Stream buffer: 20 ms to start with. The window tells you
+  if your PC needs more, and by how much.
 - It also has a small YouTube-to-audio downloader (MP3, FLAC or WAV).
 
 ## Download
@@ -28,6 +29,8 @@ You need:
 2. Rescan plugins in your DAW. In Ableton: Preferences → Plug-ins → Rescan.
 3. Put **Stream Bridge** on the Master channel and pick your virtual cable as Output
    (for VB-Cable: **CABLE Input**). It picks a cable by itself if it finds one.
+   Put it **last** on the Master channel, after any limiter or EQ, so viewers hear those too.
+   Set the cable to the same sample rate as your DAW (the plugin warns you if they differ).
 4. In Discord, share your screen. Viewers hear the DAW.
 
 The installer has an uninstaller (Windows Settings → Apps). It also removes the tools the

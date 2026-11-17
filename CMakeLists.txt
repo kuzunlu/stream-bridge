@@ -95,6 +95,27 @@ target_link_libraries(LatencyTest
         juce::juce_recommended_config_flags
         juce::juce_recommended_warning_flags)
 
+# Test program: measures how close the copy for viewers is to a perfect copy.
+juce_add_console_app(CopyQualityTest
+    VERSION ${STREAM_BRIDGE_VERSION_NUMBER}
+    PRODUCT_NAME "Copy Quality Test")
+
+target_sources(CopyQualityTest
+    PRIVATE
+        Source/BridgeOutput.cpp
+        tests/CopyQualityTest.cpp)
+
+target_compile_definitions(CopyQualityTest
+    PRIVATE
+        JUCE_WEB_BROWSER=0
+        JUCE_USE_CURL=0)
+
+target_link_libraries(CopyQualityTest
+    PRIVATE
+        juce::juce_audio_devices
+        juce::juce_recommended_config_flags
+        juce::juce_recommended_warning_flags)
+
 # Test program: runs the YouTube downloader without a DAW.
 juce_add_console_app(DownloadTest
     VERSION ${STREAM_BRIDGE_VERSION_NUMBER}

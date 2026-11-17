@@ -82,7 +82,7 @@ jobs:
             ""
             "**Or by hand:** unzip ``Stream-Bridge-$env:TAG.zip`` and copy the ``Stream Bridge.vst3`` folder to ``C:\Program Files\Common Files\VST3\``, then rescan plugins."
             ""
-            "Put **Stream Bridge** on the Master channel and pick your virtual cable as Output."
+            "Put **Stream Bridge** last on the Master channel and pick your virtual cable as Output."
             "Needs 64-bit Windows and a virtual audio cable (for example VB-Audio Virtual Cable)."
           ) -join "`n"
           gh release create "$env:TAG" "Stream-Bridge-$env:TAG.zip" $installer.FullName --title "Stream Bridge $env:TAG" --notes "$notes"

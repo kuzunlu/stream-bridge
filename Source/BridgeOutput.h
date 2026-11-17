@@ -45,7 +45,7 @@ public:
     // Always measured (a few comparisons per output block). Starts again when the buffer
     // size changes or the device starts.
     std::optional<double> takeLowestMarginMs();             // lowest since the last call
-    std::optional<double> getSessionLowestMarginMs() const; // lowest since the restart
+    std::optional<double> getSessionLowestMarginMs() const; // lowest since the Stream buffer was last changed
     std::optional<double> getSecondsSinceLastDropout() const;
 
     // The copy's delay right now: audio waiting in the plugin (averaged), plus Windows'
@@ -60,6 +60,14 @@ public:
     double getMinimumMs() const                { return minimumMs.load(); }
     int getDropoutCount() const                { return dropouts.load(); }
     juce::String getLastError() const;
+
+    // Copies a block unchanged, or with one input sample skipped (slip = 1) or repeated
+    // (slip = -1): the read position slides by one sample over slipFadeSamples in the
+    // middle of the block. Reads numSamples + slip input samples. Public so the tests
+    // can measure it.
+    static void copyWithSlip (const float* input, float* output, int numSamples, int slip) noexcept;
+    static constexpr int slipFadeSamples = 64;
+    static constexpr double slipThresholdSamples = 32.0;
 
 private:
     void audioDeviceIOCallbackWithContext (const float* const* inputChannelData,
@@ -97,12 +105,13 @@ private:
     juce::LinearSmoothedValue<float> smoothedGain;
     double smoothedFill = 0.0;
     double lastTarget = 0.0;
+    float healthSettingMs = -1.0f;
     bool priming = true;
 
     std::atomic<double> hostSampleRate { 48000.0 };
     std::atomic<double> deviceSampleRate { 0.0 };
     std::atomic<int> hostBlockSize { 512 };
-    std::atomic<float> targetLatencyMs { 40.0f };
+    std::atomic<float> targetLatencyMs { 20.0f };
     std::atomic<double> targetMs { 0.0 };
     std::atomic<double> minimumMs { 0.0 };
     std::atomic<bool> enabled { true };

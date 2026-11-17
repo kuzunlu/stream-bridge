@@ -33,7 +33,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout StreamBridgeProcessor::creat
                                                           juce::NormalisableRange<float> (-60.0f, 6.0f, 0.1f), 0.0f,
                                                           juce::AudioParameterFloatAttributes().withLabel ("dB")),
              std::make_unique<juce::AudioParameterFloat> (juce::ParameterID { "bufferMs", 1 }, "Stream Buffer",
-                                                          juce::NormalisableRange<float> (0.0f, 250.0f, 1.0f, 0.5f), 40.0f,
+                                                          juce::NormalisableRange<float> (0.0f, 250.0f, 1.0f, 0.5f), 20.0f,
                                                           juce::AudioParameterFloatAttributes().withLabel ("ms")) };
 }
 
@@ -144,6 +144,11 @@ void StreamBridgeProcessor::checkWindowsSettings()
         else if (! WindowsAudioCheck::looksVirtual (device))
             warning = "This looks like a real speaker or headphone output, so you will hear the copy late. "
                       "Pick a virtual cable, like CABLE Input.";
+        else if (const auto deviceRate = juce::roundToInt (bridge.getDeviceSampleRate()), hostRate = juce::roundToInt (getSampleRate());
+                 bridge.isRunning() && deviceRate > 0 && hostRate > 0 && deviceRate != hostRate)
+            warning = "The output runs at " + juce::String (deviceRate) + " Hz but your DAW at " + juce::String (hostRate)
+                      + " Hz, so the copy is converted and loses some treble. Fix: Win+R, mmsys.cpl, Playback, " + device
+                      + ", Properties, Advanced, pick a " + juce::String (hostRate) + " Hz format, OK. Then click Refresh.";
     }
 
     const juce::ScopedLock sl (deviceLock);
@@ -236,7 +241,10 @@ void StreamBridgeProcessor::handleAsyncUpdate()
         return;
 
     if (deviceName == bridge.getOpenDeviceName() && bridge.isRunning() && ! bridge.couldUseHostSampleRate())
+    {
+        checkWindowsSettings();    // the host's rate may have changed, which can change the warning
         return;
+    }
 
     selectOutputDevice (deviceName);
 }

@@ -204,6 +204,13 @@ void BridgeOutput::audioDeviceIOCallbackWithContext (const float* const*,
     minimumMs.store (minimumTarget * 1000.0 / hostRate);
     targetMs.store (target * 1000.0 / hostRate);
 
+    // The health numbers count from the last change of the Stream buffer setting.
+    if (const auto setting = targetLatencyMs.load(); setting != healthSettingMs)
+    {
+        healthSettingMs = setting;
+        resetHealth();
+    }
+
     auto ready = fifo.getNumReady();
 
     if (! enabled.load())
@@ -232,7 +239,6 @@ void BridgeOutput::audioDeviceIOCallbackWithContext (const float* const*,
     if (target != lastTarget)
     {
         lastTarget = target;
-        resetHealth();    // the old numbers belonged to the old buffer size
 
         if (ready < target)
         {
@@ -255,13 +261,25 @@ void BridgeOutput::audioDeviceIOCallbackWithContext (const float* const*,
         smoothedFill = ready;
     }
 
-    // Play a little faster when the FIFO is fuller than the target, a little slower
-    // when it is emptier. This cancels the clock drift between the two devices.
+    // The two devices have different clocks, so the FIFO slowly fills up or empties.
     smoothedFill += 0.01 * (ready - smoothedFill);
     averageFillSamples.store (smoothedFill);
+
+    // Same rate on both sides: the copy is passed through unchanged, and the drift is
+    // corrected by skipping or repeating one sample when the FIFO is off by more than
+    // slipThresholdSamples. Different rates: the converter plays a little faster when
+    // the FIFO is fuller than the target and a little slower when it is emptier.
+    const auto sameRate = baseRatio == 1.0;
+    int slip = 0;
+
+    if (sameRate && smoothedFill > target + slipThresholdSamples)
+        slip = 1;
+    else if (sameRate && smoothedFill < target - slipThresholdSamples)
+        slip = -1;
+
     const auto fillError = juce::jlimit (-1.0, 1.0, (smoothedFill - target) / target);
     const auto ratio = baseRatio * (1.0 + maxSpeedCorrection * fillError);
-    const auto needed = (int) std::ceil (ratio * numSamples) + 4;
+    const auto needed = sameRate ? numSamples + slip : (int) std::ceil (ratio * numSamples) + 4;
 
     // Running out is a dropout only while the host is still sending. When it stops
     // (export, audio engine off, plugin switched off) the FIFO empties as expected.
@@ -303,12 +321,23 @@ void BridgeOutput::audioDeviceIOCallbackWithContext (const float* const*,
             scratch.copyFrom (ch, size1, fifoBuffer, ch, start2, size2);
     }
 
-    int used = 0;
+    if (sameRate)
+    {
+        for (int ch = 0; ch < 2; ++ch)
+            copyWithSlip (scratch.getReadPointer (ch), rendered.getWritePointer (ch), numSamples, slip);
 
-    for (int ch = 0; ch < 2; ++ch)
-        used = interpolators[(size_t) ch].process (ratio, scratch.getReadPointer (ch), rendered.getWritePointer (ch), numSamples);
+        fifo.finishedRead (needed);
+        smoothedFill -= slip;    // the FIFO just moved by one sample; don't wait for the average to see it
+    }
+    else
+    {
+        int used = 0;
 
-    fifo.finishedRead (used);
+        for (int ch = 0; ch < 2; ++ch)
+            used = interpolators[(size_t) ch].process (ratio, scratch.getReadPointer (ch), rendered.getWritePointer (ch), numSamples);
+
+        fifo.finishedRead (used);
+    }
 
     smoothedGain.setTargetValue (gain.load());
     smoothedGain.applyGain (rendered, numSamples);
@@ -316,6 +345,56 @@ void BridgeOutput::audioDeviceIOCallbackWithContext (const float* const*,
     for (int ch = 0; ch < numOutputChannels; ++ch)
         if (outputChannelData[ch] != nullptr)
             juce::FloatVectorOperations::copy (outputChannelData[ch], rendered.getReadPointer (juce::jmin (ch, 1)), numSamples);
+}
+
+void BridgeOutput::copyWithSlip (const float* input, float* output, int numSamples, int slip) noexcept
+{
+    if (slip == 0)
+    {
+        juce::FloatVectorOperations::copy (output, input, numSamples);
+        return;
+    }
+
+    // In the middle of the block, the read position slides from i to i + slip over
+    // slipFadeSamples, so the one-sample step makes no click. While it slides, samples
+    // between two input samples are worked out with the same 5-point Lagrange math as
+    // JUCE's LagrangeInterpolator. The rest of the block is copied unchanged.
+    const auto fade = juce::jmin (slipFadeSamples, numSamples - 10);   // leaves room for the 5 points
+    const auto start = juce::jmax (3, (numSamples - juce::jmax (0, fade)) / 2);
+
+    if (fade < 4)
+    {
+        juce::FloatVectorOperations::copy (output, input, start);
+        juce::FloatVectorOperations::copy (output + start, input + start + slip, numSamples - start);
+        return;
+    }
+
+    juce::FloatVectorOperations::copy (output, input, start);
+
+    for (int i = start; i < start + fade; ++i)
+    {
+        const auto position = (double) i + slip * (double) (i - start + 1) / (double) (fade + 1);
+        const auto base = (int) std::floor (position);
+        const auto offset = (float) (position - base);
+        const auto* points = input + base;   // points[-2] .. points[2]
+
+        float value = 0.0f;
+
+        for (int k = -2; k <= 2; ++k)
+        {
+            auto weight = 1.0f;
+
+            for (int j = -2; j <= 2; ++j)
+                if (j != k)
+                    weight *= (offset - (float) j) / (float) (k - j);
+
+            value += weight * points[k];
+        }
+
+        output[i] = value;
+    }
+
+    juce::FloatVectorOperations::copy (output + start + fade, input + start + fade + slip, numSamples - start - fade);
 }
 
 void BridgeOutput::audioDeviceAboutToStart (juce::AudioIODevice* startingDevice)
@@ -333,7 +412,6 @@ void BridgeOutput::audioDeviceAboutToStart (juce::AudioIODevice* startingDevice)
     // Throw away any old audio left over from an earlier session.
     fifo.finishedRead (fifo.getNumReady());
     priming = true;
-    resetHealth();
 
     {
         const juce::ScopedLock sl (errorLock);

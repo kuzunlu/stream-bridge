@@ -32,6 +32,7 @@ private:
     void refreshDeviceList();
     void chooseDownloadFolder();
     void updateHealth();
+    void clearHealthHistory();
     void updateWarning();
     void updateSavedFile();
     void updateLayout();
@@ -51,11 +52,17 @@ private:
     juce::Slider gainSlider { juce::Slider::LinearHorizontal, juce::Slider::TextBoxRight };
     juce::Label bufferLabel { {}, "Stream buffer" };
     juce::Slider bufferSlider { juce::Slider::LinearHorizontal, juce::Slider::TextBoxRight };
-    juce::TextButton detailsButton { "Details" };
-    juce::Label healthLabel, marginLabel, adviceLabel, delayLabel;
-    std::array<std::optional<double>, 8> recentMargins;   // the last 2 s, one value per timer tick
-    size_t nextMargin = 0;
+    juce::Label healthLabel, adviceLabel, totalLabel, delayLabel;
     juce::Label statusLabel;
+
+    // Stream health for the last 10 seconds, one entry per second.
+    static constexpr size_t historySize = 10;
+    std::array<std::optional<double>, historySize> recentMargins;
+    std::array<int, historySize> recentDropouts {};
+    size_t nextSecond = 0, secondsMeasured = 0;
+    double historyTarget = -1.0;
+    int lastDropoutCount = 0;
+    int timerTicks = 0;
     juce::Label warningLabel;
     juce::TextButton getCableButton { "Get VB-Cable" };
 

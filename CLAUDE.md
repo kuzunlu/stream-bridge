@@ -18,7 +18,8 @@ Core promises, which must never break:
 
 - **The host's audio is never changed or delayed.** `processBlock` passes the buffer through
   untouched and the plugin reports 0 latency. `tests/LatencyTest.cpp` checks this bit-exactly.
-- **Only the copy is delayed**, by the "Stream buffer" (default 40 ms, 0–250 ms).
+- **Only the copy is delayed**, by the "Stream buffer" (default 20 ms since 2026-11-17,
+  was 40 ms; 0–250 ms). Saved projects keep their own value.
 - **Cost must be minuscule.** The owner accepts a change only if its CPU/RAM/disk cost is
   tiny, and wants that cost stated up front. Nothing may add locks, allocations or system
   calls on the host audio thread beyond what is already there.
@@ -29,12 +30,14 @@ Core promises, which must never break:
 |---|---|
 | `Source/PluginProcessor.*` | The plugin. Parameters, state, device selection, status/warning text, reconnect logic (`handleAsyncUpdate`). |
 | `Source/BridgeOutput.*` | The bridge: lock-free FIFO from the host thread to a WASAPI output thread, resampling with clock-drift correction, stream health measurement, device open/close/reconnect events. |
-| `Source/PluginEditor.*` | The window: controls, health line + Details, warnings, downloader UI, drag-out label, tooltips, dynamic height (`layOut`). |
+| `Source/PluginEditor.*` | The window: controls, stream health (last 10 seconds, always shown), warnings, downloader UI, drag-out label, tooltips, dynamic height (`layOut`). |
 | `Source/AudioDownloader.*` | YouTube downloader thread: installs pinned tools, runs yt-dlp then ffmpeg, progress parsing, auto-update-and-retry. |
 | `Source/WindowsAudioCheck.*` | Registry checks: "Listen to this device" on the cable's recording side, and the "looks like a virtual device" name heuristic. |
 | `tests/LatencyTest.cpp` | Console app: drives the processor like Ableton (48 kHz, 128-sample blocks) and checks output == input, 0 latency, CPU, RAM, dropouts. |
 | `tests/DownloadTest.cpp` | Console app: runs the downloader without a DAW. `DownloadTest.exe <link> <folder> [format index]`. |
-| `ffmpeg/build.sh` | Builds the small (~2.2 MB) static ffmpeg + LAME in MSYS2 UCRT64. |
+| `tests/CopyQualityTest.cpp` | Console app: the viewers' copy against a perfect copy with test tones (unconverted + skips vs the Lagrange converter, at 20/50/100 ppm). |
+| `tests/FfmpegIdenticalTest.ps1` | PowerShell: the small ffmpeg against a full ffmpeg of the same version, all 6 formats, byte by byte. |
+| `ffmpeg/build.sh` | Builds the small (~2.4 MB) static ffmpeg + LAME in MSYS2 UCRT64. |
 | `installer/StreamBridge.iss` | Inno Setup 6 installer script. |
 | `build.bat` | Local/CI build: builds ffmpeg once via MSYS2, then CMake + Ninja with Visual Studio's toolchain. |
 | `.github/workflows/build.yml` | CI on every push; a `v*` tag also publishes a GitHub Release. |
@@ -58,11 +61,26 @@ Key behaviour in the callback:
 - **Priming**: after a start or a dropout, output silence until the FIFO holds the target.
 - **Drift correction**: the two devices have different clocks, so the resampling ratio is
   nudged by at most ±0.2% (`maxSpeedCorrection`) towards the target fill (smoothed).
-- **Buffer setting changed**: jump to the new fill at once (may click once) and reset health.
+- **Buffer setting changed**: jump to the new fill at once (may click once).
+- **Health resets only when the user changes the Stream buffer setting** (`healthSettingMs`
+  in the callback). Restarts, reconnects and a different minimum from another device do not
+  reset it; the owner wants "since the Stream buffer was last changed".
 - **Overfull** (`> min(4 × target, fifoSize − 4096)`): skip ahead.
 - **Health**: the lowest margin (spare samples after a read) and dropouts are always measured.
   A dropout is counted only if the host pushed within the last 250 ms, so stopping the
   engine, exporting or bypassing the plugin is not reported as a dropout.
+  Measured cost (2026-11-17, `HealthBench`): 15–19 ns per block on the host thread (one
+  `getMillisecondCounter` + one atomic store) and 9–11 ns per device callback.
+- **Health display** (editor, once per second, only while the window is open): keeps the
+  last 10 seconds, one entry per second (lowest margin, dropouts). A big coloured line says
+  stable (≥ 3 ms spare, green), close to gaps (1–3 ms, orange), almost a gap (< 1 ms, red)
+  or gaps (any dropout, red); under it "What to do:" gives the buffer that keeps 3 ms
+  spare. It suggests lowering only after a full 10 seconds and only if there was no
+  dropout since the Stream buffer was last changed. The "Stream buffer" label turns
+  orange/red when it should be raised. Changing the Stream buffer starts everything over;
+  a stop or restart only starts the 10-second window over. Below it, "Since the Stream
+  buffer was last changed: …" shows the dropout count. The owner chose to keep "0 seconds
+  ago" (not "just now"). There is no Details button any more; everything is always shown.
 - **Over-full drains slowly on purpose**: after a hiccup the FIFO may hold up to 4× the
   target and drift correction drains it at 0.2% speed. The owner chose to keep this rather
   than jump back (which would click).
@@ -73,7 +91,7 @@ Device modes and delay readout:
   smallest buffer the driver allows. If that fails, `tryOpen` falls back to a lazily made
   normal shared-mode type. `isLowLatencyMode()` is true only when the buffer really is
   smaller than Windows' default.
-- Details shows "Delay of the copy now": the averaged FIFO fill (`getBufferedMs`) plus
+- The window shows "Copy delay now": the averaged FIFO fill (`getBufferedMs`) plus
   JUCE's output latency for the device (`getWindowsOutputMs`). The cable and Discord add
   their own delay after that.
 - Known timing issue: if the backing track plays in a **browser** while the guitar goes
@@ -115,6 +133,22 @@ Checked when an output is opened, when the editor opens, and on Refresh. Never p
 - **Real speaker output**: `looksVirtual()` is a name heuristic (CABLE, Virtual, VB-Audio,
   Voicemeeter, Wave Link, Steam Streaming). If no output looks virtual, the editor shows a
   "Get VB-Cable" button.
+- **Sample rate differs** (lowest priority of the three): the output runs at another rate
+  than the host. In WASAPI low-latency mode Windows does no conversion and a device offers
+  only its Windows format, so the reopen-at-host-rate check cannot fix it; the copy then
+  goes through the Lagrange converter, which loses treble (measured 2026-11-17: −0.1 dB at
+  10 kHz, −0.6 at 14 k, −1.1 at 16 k, −3.1 at 20 k on average, with added tones 25–38 dB
+  below 10–14 kHz content). The warning gives the mmsys.cpl steps. It is also rechecked
+  from `handleAsyncUpdate` when the host rate changes.
+- **Same rate on both sides: no converting.** `copyWithSlip` passes the copy through
+  unchanged; when the smoothed FIFO fill is more than `slipThresholdSamples` (32) off the
+  target, one sample is skipped or repeated, the read position sliding by one sample over
+  `slipFadeSamples` (64) with 5-point Lagrange math (same as JUCE's). Slips happen
+  drift × 48000 times per second (about 1 at 20 ppm, 5 at 100 ppm). Measured 2026-11-17
+  against a perfect copy, at 50 ppm: level 0 dB at every frequency (Lagrange today:
+  −1.1 dB at 16 kHz, −2.5 at 20 k); difference −57 dB at 10 kHz (Lagrange −35), −39 at
+  16 k (−16), −32 at 20 k (−8); also better in the worst 10 ms. Different rates still use
+  the Lagrange converter. JUCE's WindowedSinc was rejected: flat, but ~4.5% of a CPU core.
 
 ## YouTube downloader (AudioDownloader)
 
@@ -208,9 +242,16 @@ There are no unit tests. Verify with:
 - `LatencyTest.exe [device] [bufferMs]`: must print "Output exactly equal to input … YES"
   and exit 0. Needs a virtual cable.
 - `DownloadTest.exe <link> <folder> [0-5]`: must end with "Saved: …".
+- `CopyQualityTest.exe`: must end with "… beats the converter everywhere: YES" and exit 0.
+  Run it after any change to `BridgeOutput`'s copy or drift correction.
+- `powershell -ExecutionPolicy Bypass -File tests\FfmpegIdenticalTest.ps1 [-Link <YouTube link>]`
+  after `build.bat`: must end with "…byte-identical…: YES" and exit 0. Run it after any
+  change to `ffmpeg/build.sh`. It downloads a pinned full ffmpeg once into `build\`, makes
+  its own Opus and AAC test sounds (pink noise), and with `-Link` also tests a real video's
+  Opus and AAC versions. Verified 2026-11-17: YES with the current build (24 of 24
+  identical); NO with the old `--disable-x86asm` build, so it does catch that.
 - A real check in Ableton: hear yourself once, Discord viewers hear the DAW, the status line
-  says "Playing to CABLE Input …" and "Stream OK".
-- The ffmpeg build can be tested alone: convert Opus/AAC/MP3 inputs to MP3/FLAC/WAV.
+  says "Playing to CABLE Input …" and the health line says "Stream stable".
 
 ## Working with the owner
 
@@ -236,12 +277,14 @@ input check, warning about two plugin instances, protecting existing files from 
 jumping back quickly when the FIFO is over-full.
 
 Accepted and implemented on branch `small-ffmpeg`: bundled small ffmpeg, auto-reconnect,
-reopen at the host rate, "Listen"/real-speaker warnings, always-on health line with
-Details, tooltips, 250 ms buffer cap, playlist → first video, inter-instance tool lock,
-work-folder cleanup, prompt cancel, drag-to-Ableton, Show in folder, conversion progress,
-auto-update-and-retry, FLAC, MP3 192 default, installer, Get VB-Cable button, README,
-version in the window, dropping `juce_audio_utils`, dead-code removal, the "Delay of the
-copy now" readout, WASAPI low-latency mode with fallback.
+reopen at the host rate, "Listen"/real-speaker warnings, tooltips, 250 ms buffer cap,
+playlist → first video, inter-instance tool lock, work-folder cleanup, prompt cancel,
+drag-to-Ableton, Show in folder, conversion progress, auto-update-and-retry, FLAC, MP3 192
+default, installer, Get VB-Cable button, README, version in the window, dropping
+`juce_audio_utils`, dead-code removal, the "Copy delay now" readout, WASAPI low-latency
+mode with fallback, ffmpeg assembly code on (identical output), no Details button: the
+stream health for the last 10 seconds is always shown, updated once per second, with a
+clear "What to do:" line.
 
 ## Where we left off (2026-11-17)
 
@@ -255,16 +298,19 @@ Branch `small-ffmpeg` (not merged into `main`; no release tag pushed). Commits o
 | `0fa99f4` | The big batch (warnings, health line, downloader, installer, version…) | failed: CMake needed VERSION on the test apps |
 | `9f86460` | CLAUDE.md + README | same failure |
 | `c19923e` | VERSION on the test apps | **green**, installer artifact produced |
-| `e2c5355` | WASAPI low-latency mode + "Delay of the copy now" readout | **not yet checked** |
+| `e2c5355` | WASAPI low-latency mode + "Delay of the copy now" readout | built |
+| `8e6e50e` | No Co-Authored-By line in CLAUDE.md | built |
+| `c01b5f5` | ffmpeg assembly code back on (identical output) | **green** |
+| next | Health for the last 10 seconds, always shown, no Details button | not pushed yet |
 
 Next steps, in order:
 
-1. Check CI for `e2c5355` (or later). If red, get the error lines and fix.
+1. Check CI for the newest commit. If red, get the error lines and fix.
 2. The owner installs the installer artifact and tests: version text, "Listen" warning
-   disappearing after Refresh, "Stream OK", tooltips, downloader (MP3 192, FLAC, progress,
-   drag into Ableton, Show in folder), Discord viewers hear the DAW.
-3. The owner reads Details → "Delay of the copy now: … (… plugin + … Windows, low-latency
-   / normal mode)" and reports the numbers. This shows how much of the ~200 ms guitar lag
+   disappearing after Refresh, the stream health lines, tooltips, downloader (MP3 192,
+   FLAC, progress, drag into Ableton, Show in folder), Discord viewers hear the DAW.
+3. The owner reads "Copy delay now: … (plugin … + Windows …, low-latency / normal mode)"
+   and reports the numbers. This shows how much of the ~200 ms guitar lag
    is the plugin. Whether VB-Cable supports low-latency mode is unknown until then.
 4. When the owner says it works: merge `small-ffmpeg` into `main`. A release tag
    (e.g. `v0.3.0`) only if the owner asks.
@@ -282,11 +328,17 @@ Findings from 2026-11-17:
   (VB-Audio, Voicemeeter) add buffering, other virtual cables don't matter because Discord
   captures the process audio before the cable, and Focusrite Loopback is a microphone
   (separate, unsynced path in Discord).
-- Open question, not answered (the owner interrupted it): keep "MP3 320 kbps (larger
-  file)" in the format menu, remove it, or remove 320 and 256. The owner asked why 320
-  exists if YouTube is only ~128–160 kbps; explained it is the most faithful MP3 copy but
-  practically the same as 192. Ask again (yes/no style) before changing anything.
-- This PC (the one used on 2026-11-16/17) has Visual Studio 2022 Professional **without**
+- Decided 2026-11-17: "MP3 320 kbps (larger file)" stays in the format menu, as do all
+  other formats. (The owner had asked why 320 exists if YouTube is only ~128–160 kbps:
+  it is the most faithful MP3 copy, practically the same as 192.)
+- The **other PC** (not the home PC; used on 2026-11-16 daytime and 2026-11-17) has Visual
+  Studio Build Tools 2026 **with** C++, so it builds the plugin with `build.bat`, and MSYS2
+  in `C:\msys64` with gcc and nasm. Its network breaks MSYS2's `curl` (TLS certificate
+  check fails), so download the two source tarballs with PowerShell and put them in
+  `build\ffmpeg\work\` first; `build.sh` checks their SHA-256 and skips the download.
+  Its project path contains a space (`C:\Users\Kursat Uzunlu\...`); deep scratch folders
+  hit MAX_PATH with JUCE, so build helper tools in a short folder like `C:\msys64\tmp`.
+- The **home PC** (the one used on the evening of 2026-11-16) has Visual Studio 2022 Professional **without**
   the C++ workload, so it cannot build the plugin; MSYS2 is installed (UCRT64 gcc), which
   builds ffmpeg and allows a syntax-only check of the sources:
   `g++ -std=c++17 -fsyntax-only -w -U__MINGW32__ -U__MINGW64__ -I libs/JUCE/modules
