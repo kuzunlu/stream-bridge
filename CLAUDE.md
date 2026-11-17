@@ -65,7 +65,12 @@ Key behaviour in the callback:
 - **Health resets only when the user changes the Stream buffer setting** (`healthSettingMs`
   in the callback). Restarts, reconnects and a different minimum from another device do not
   reset it; the owner wants "since the Stream buffer was last changed".
-- **Overfull** (`> min(4 × target, fifoSize − 4096)`): skip ahead.
+- **Pile-up** (the output side paused while the host kept sending): when the FIFO holds
+  more than target + one host block + `pileUpMarginMs` (2 ms) for `pileUpCallbacks` (3)
+  callbacks in a row, the extra is thrown away at once (one short skip for viewers), so the
+  copy is back at the Stream buffer's delay right away. Tested 2026-11-17 at 17 ms: no jumps
+  in 20 seconds of normal playing, a 29 ms pile-up gone after 33 ms, a 2.7 ms one left to
+  the normal drift correction. `getPileUpJumpCount()` counts jumps for tests (not shown).
 - **Health**: the lowest margin (spare samples after a read) and dropouts are always measured.
   A dropout is counted only if the host pushed within the last 250 ms, so stopping the
   engine, exporting or bypassing the plugin is not reported as a dropout.
@@ -81,9 +86,10 @@ Key behaviour in the callback:
   a stop or restart only starts the 10-second window over. Below it, "Since the Stream
   buffer was last changed: …" shows the dropout count. The owner chose to keep "0 seconds
   ago" (not "just now"). There is no Details button any more; everything is always shown.
-- **Over-full drains slowly on purpose**: after a hiccup the FIFO may hold up to 4× the
-  target and drift correction drains it at 0.2% speed. The owner chose to keep this rather
-  than jump back (which would click).
+- **No slow draining** (the owner's decision on 2026-11-17, reversing an earlier one): the
+  old behaviour let a pile-up of up to 3× the target drain at ~2 ms per second (24 s at
+  17 ms, 58 s at 40 ms), keeping viewers that much further behind. The owner prefers one
+  short skip and the setting's delay right away.
 
 Device modes and delay readout:
 
@@ -274,7 +280,18 @@ There are no unit tests. Verify with:
 
 Rejected: fading the copy in and out, a send level meter, a "Discord can hear this"
 input check, warning about two plugin instances, protecting existing files from overwrite,
-jumping back quickly when the FIFO is over-full.
+slow draining after a pile-up (was the choice until 2026-11-17; now the extra is dropped at
+once), suggesting at least 1.5× the buffer after a dropout, "just now" instead of
+"0 seconds ago", a "Video for Ableton (MP4)" download format (so Ableton's video window
+could show the YouTube picture in sync).
+
+The browser-sync issue, as explained to the owner on 2026-11-17: Discord takes the
+browser's sound early (inside Windows), while the owner hears it late through the
+Scarlett's Windows (non-ASIO) driver (about 100 ms, measured by ear) and plays along with
+that, so the guitar reaches the stream late. The browser holds its picture back to match
+the late sound, so on stream the YouTube picture is also behind its own sound. The fix is
+playing the song inside Ableton (downloader + drag to track); Discord cannot delay a
+screen share's picture or another app's sound.
 
 Accepted and implemented on branch `small-ffmpeg`: bundled small ffmpeg, auto-reconnect,
 reopen at the host rate, "Listen"/real-speaker warnings, tooltips, 250 ms buffer cap,
@@ -284,11 +301,15 @@ default, installer, Get VB-Cable button, README, version in the window, dropping
 `juce_audio_utils`, dead-code removal, the "Copy delay now" readout, WASAPI low-latency
 mode with fallback, ffmpeg assembly code on (identical output), no Details button: the
 stream health for the last 10 seconds is always shown, updated once per second, with a
-clear "What to do:" line.
+clear "What to do:" line, health reset only on a Stream buffer change, sample-rate warning,
+"put it last on Master" text, unconverted copy with skips when the rates match, default
+Stream buffer 20 ms, the two quality tests, MP3 320 stays, pile-up dropped at once.
 
 ## Where we left off (2026-11-17)
 
-Branch `small-ffmpeg` (not merged into `main`; no release tag pushed). Commits on it:
+The owner wrapped the plugin up: branch `small-ffmpeg` was merged into `main` (fast-forward)
+and released as **v0.3.0** (tag on the commit "Drop piled-up audio at once instead of
+draining it slowly"). CI builds the release zip and installer from the tag.
 
 | Commit | What | CI |
 |---|---|---|
@@ -301,19 +322,18 @@ Branch `small-ffmpeg` (not merged into `main`; no release tag pushed). Commits o
 | `e2c5355` | WASAPI low-latency mode + "Delay of the copy now" readout | built |
 | `8e6e50e` | No Co-Authored-By line in CLAUDE.md | built |
 | `c01b5f5` | ffmpeg assembly code back on (identical output) | **green** |
-| next | Health for the last 10 seconds, always shown, no Details button | not pushed yet |
+| `5199ae1` | Health for the last 10 seconds, sample-rate warning, unconverted copy, 20 ms default, quality tests | not checked |
+| v0.3.0 | Pile-up dropped at once instead of draining slowly | release build |
 
-Next steps, in order:
+Not yet tried by the owner in a real Ableton + Discord session (only with the test
+programs): the health display, sample-rate warning, unconverted copy, 20 ms default and
+pile-up jump. If something is wrong there, fix it on a branch and release v0.3.1.
 
-1. Check CI for the newest commit. If red, get the error lines and fix.
-2. The owner installs the installer artifact and tests: version text, "Listen" warning
-   disappearing after Refresh, the stream health lines, tooltips, downloader (MP3 192,
-   FLAC, progress, drag into Ableton, Show in folder), Discord viewers hear the DAW.
-3. The owner reads "Copy delay now: … (plugin … + Windows …, low-latency / normal mode)"
-   and reports the numbers. This shows how much of the ~200 ms guitar lag
-   is the plugin. Whether VB-Cable supports low-latency mode is unknown until then.
-4. When the owner says it works: merge `small-ffmpeg` into `main`. A release tag
-   (e.g. `v0.3.0`) only if the owner asks.
+If the owner comes back:
+
+1. If the v0.3.0 release build was red, get the error lines and fix.
+2. The owner may report "Copy delay now: … (plugin … + Windows …, low-latency / normal
+   mode)" from a real session. Whether VB-Cable supports low-latency mode is unknown.
 
 Findings from 2026-11-17:
 

@@ -59,6 +59,7 @@ public:
     double getTargetMs() const                 { return targetMs.load(); }
     double getMinimumMs() const                { return minimumMs.load(); }
     int getDropoutCount() const                { return dropouts.load(); }
+    int getPileUpJumpCount() const             { return pileUpJumps.load(); }   // for tests
     juce::String getLastError() const;
 
     // Copies a block unchanged, or with one input sample skipped (slip = 1) or repeated
@@ -88,6 +89,8 @@ private:
     static constexpr double maxTargetSamples = fifoSize / 2.0;
     static constexpr double maxSpeedCorrection = 0.002;
     static constexpr double jitterMarginSamples = 32.0;
+    static constexpr double pileUpMarginMs = 2.0;      // over target + one host block counts as a pile-up
+    static constexpr int pileUpCallbacks = 3;          // ...when seen this many times in a row
 
     std::unique_ptr<juce::AudioIODeviceType> deviceType;         // low-latency mode; also lists devices
     std::unique_ptr<juce::AudioIODeviceType> normalDeviceType;   // fallback, made only when needed
@@ -106,6 +109,7 @@ private:
     double smoothedFill = 0.0;
     double lastTarget = 0.0;
     float healthSettingMs = -1.0f;
+    int overfullCallbacks = 0;
     bool priming = true;
 
     std::atomic<double> hostSampleRate { 48000.0 };
@@ -118,6 +122,7 @@ private:
     std::atomic<bool> running { false };
     std::atomic<float> gain { 1.0f };
     std::atomic<int> dropouts { 0 };
+    std::atomic<int> pileUpJumps { 0 };
     std::atomic<juce::uint32> lastPushTime { 0 };
     std::atomic<double> averageFillSamples { 0.0 };
     std::atomic<double> windowsOutputMs { 0.0 };

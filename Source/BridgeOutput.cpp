@@ -229,6 +229,7 @@ void BridgeOutput::audioDeviceIOCallbackWithContext (const float* const*,
         priming = false;
         smoothedFill = ready;
         lastTarget = target;
+        overfullCallbacks = 0;
 
         for (auto& interpolator : interpolators)
             interpolator.reset();
@@ -252,13 +253,21 @@ void BridgeOutput::audioDeviceIOCallbackWithContext (const float* const*,
         smoothedFill = ready;
     }
 
-    // Far too much audio waiting (for example after a CPU spike): jump forward.
-    if (ready > juce::jmin (4.0 * target, fifoSize - 4096.0))
+    // Audio piled up (the output side paused for a moment while the host kept sending):
+    // throw the extra away at once, so the copy is back to the Stream buffer's delay right
+    // away. Normal timing wobble is up to about one host block, so only a pile-up bigger
+    // than that, seen three times in a row, counts.
+    const auto pileUpLimit = target + hostBlockSize.load() + pileUpMarginMs * 0.001 * hostRate;
+    overfullCallbacks = ready > pileUpLimit ? overfullCallbacks + 1 : 0;
+
+    if (overfullCallbacks >= pileUpCallbacks || ready > fifoSize - 4096)
     {
         const auto skip = ready - (int) target;
         fifo.finishedRead (skip);
         ready -= skip;
         smoothedFill = ready;
+        overfullCallbacks = 0;
+        pileUpJumps.fetch_add (1);
     }
 
     // The two devices have different clocks, so the FIFO slowly fills up or empties.
