@@ -216,7 +216,8 @@ There are no unit tests. Verify with:
 - Work on a branch, commit, and push so CI builds it; the owner checks the Actions tab and
   tests the artifact. Merge to `main` only when the owner says it works. Ask before pushing
   to a new branch or to `main`.
-- End commit messages with the `Co-Authored-By` line given in the session's instructions.
+- Commit messages: one short title line only. No body, no `Co-Authored-By` line, no
+  "Generated with Claude Code". The same goes for pull request descriptions.
 - Finish with one clear "what to do now" step, in numbered clicks. Long option lists or
   several parallel next steps confuse the owner ("I didn't understand what to do now").
 - The owner can't share CI logs easily: ask them to click the red step and paste the lines
