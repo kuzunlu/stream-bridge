@@ -152,7 +152,12 @@ Checked when an output is opened, when the editor opens, and on Refresh. Never p
 - `--disable-everything --disable-autodetect`, then only: demuxers matroska, mov, mp3, ogg,
   flac, wav, aac, ac3, eac3, mpegts; decoders opus, aac, mp3, vorbis, flac, alac, ac3, eac3,
   pcm; encoders libmp3lame, flac, pcm_s16le; muxers mp3, flac, wav; a few audio filters.
-  `--enable-small`, no asm, static, w32threads. Result ≈ 2.2 MB, only Windows system DLLs.
+  `--enable-small`, asm on, static, w32threads. Result ≈ 2.4 MB, only Windows system DLLs.
+- **Keep ffmpeg's assembly code on** (needs `nasm`). Without it the Opus and AAC decoders
+  round a few samples differently, and the MP3 encoder turns that into different files.
+  With it, every format is byte-identical to a full ffmpeg 9.0.2 build (checked
+  2026-11-17 with both the Opus and the AAC version of a video). The owner wants identical
+  output, so check that again after any change to the build options.
 - Writes `ffmpeg-LICENSE.txt` (LGPL 2.1) and `ffmpeg-README.txt` (exact sources) next to
   it; both ship inside the plugin for LGPL compliance.
 - To add a codec or bump versions: edit the script, update the SHA-256, rebuild. CI caches
@@ -163,7 +168,8 @@ Checked when an output is opened, when the editor opens, and on Refresh. Never p
 ## Building
 
 - Needs Visual Studio 2022 (or Build Tools) with **Desktop development with C++**, plus
-  MSYS2 in `C:\msys64` with `mingw-w64-ucrt-x86_64-gcc make diffutils` for ffmpeg.
+  MSYS2 in `C:\msys64` with `mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-nasm make diffutils`
+  for ffmpeg.
 - `build.bat` → `build\StreamBridge_artefacts\Release\VST3\Stream Bridge.vst3`. It builds
   `build\ffmpeg\ffmpeg.exe` once if missing, then always reconfigures CMake (so the version
   from `git describe` stays current).

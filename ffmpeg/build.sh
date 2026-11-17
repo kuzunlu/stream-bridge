@@ -22,8 +22,8 @@ work=$out/work
 prefix=$work/prefix
 jobs=$(nproc)
 
-if ! command -v gcc >/dev/null || ! command -v make >/dev/null; then
-    echo "MSYS2 needs a compiler. In an MSYS2 terminal run: pacman -S --needed mingw-w64-ucrt-x86_64-gcc make" >&2
+if ! command -v gcc >/dev/null || ! command -v make >/dev/null || ! command -v nasm >/dev/null; then
+    echo "MSYS2 needs a compiler. In an MSYS2 terminal run: pacman -S --needed mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-nasm make" >&2
     exit 1
 fi
 
@@ -68,7 +68,7 @@ tar -xJf "$ffmpegArchive" -C "$work"
                 --disable-doc --disable-debug --disable-ffplay --disable-ffprobe \
                 --disable-avdevice --disable-swscale \
                 --disable-pthreads --enable-w32threads \
-                --disable-x86asm --enable-small \
+                --enable-small \
                 --enable-libmp3lame \
                 --enable-protocol=file,pipe \
                 --enable-demuxer=matroska,mov,mp3,ogg,flac,wav,aac,ac3,eac3,mpegts \

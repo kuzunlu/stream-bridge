@@ -32,7 +32,7 @@ jobs:
       - name: Install the MSYS2 compiler for ffmpeg
         if: steps.ffmpeg-cache.outputs.cache-hit != 'true'
         shell: cmd
-        run: C:\msys64\usr\bin\bash.exe -lc "pacman -S --needed --noconfirm mingw-w64-ucrt-x86_64-gcc make diffutils"
+        run: C:\msys64\usr\bin\bash.exe -lc "pacman -S --needed --noconfirm mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-nasm make diffutils"
 
       - name: Build
         shell: cmd
