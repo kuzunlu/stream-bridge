@@ -213,8 +213,8 @@ Checked when an output is opened, when the editor opens, and on Refresh. Never p
 - `build.bat` → `build\StreamBridge_artefacts\Release\VST3\Stream Bridge.vst3`. It builds
   `build\ffmpeg\ffmpeg.exe` once if missing, then always reconfigures CMake (so the version
   from `git describe` stays current).
-- If a PC lacks the C++ workload, don't install it without asking (several GB). Push the
-  branch and let CI compile instead.
+- If a PC lacks the C++ workload, don't install it without asking (several GB). Build on
+  the other PC (it has the C++ tools) instead; GitHub Actions is no longer used.
 - The VST3 links `juce_audio_devices` + `juce_cryptography` (not `juce_audio_utils`, which
   was unused). Runtime is static (`/MT`), so no VC++ redistributable is needed.
 - Source files use CRLF in the working tree (`* text=auto`, `*.bat` CRLF, `*.sh` LF). When
@@ -222,6 +222,10 @@ Checked when an output is opened, when the editor opens, and on Refresh. Never p
 
 ## Versioning, CI and releases
 
+- **The owner stopped using GitHub Actions on 2026-11-27.** Build with `build.bat` on a PC
+  that can, and never ask the owner to check the Actions tab. The workflow file is still in
+  the repo, so a push still starts a build unless Actions is turned off in the repo's
+  Settings → Actions → General; ignore those runs.
 - Version = `git describe --tags --match "v[0-9]*"`, e.g. `v0.3.0` or `v0.3.0-2-gabc1234`.
   CMake passes the numeric part to `juce_add_plugin VERSION` and the full text as
   `STREAM_BRIDGE_VERSION`, shown in the window. CI checks out with `fetch-depth: 0` for tags.
@@ -229,8 +233,10 @@ Checked when an output is opened, when the editor opens, and on Refresh. Never p
   → check ffmpeg is in the bundle → upload **Stream-Bridge-VST3** → build the installer with
   Inno Setup (installed via choco if missing) → upload **Stream-Bridge-Installer**.
   Actions are pinned by commit SHA with a version comment.
-- Release: `git tag vX.Y.Z && git push origin vX.Y.Z` → CI publishes the zip + installer.
-  Never push a tag unless the owner asks.
+- Release (by hand now): `build.bat`, then the installer with Inno Setup
+  (`ISCC.exe /Q /DAppVersion=X.Y.Z installer\StreamBridge.iss`), zip the `.vst3` folder,
+  tag `vX.Y.Z`, and `gh release create` with the zip and installer. Never push a tag or
+  make a release unless the owner asks.
 - The repo is **public** since 2026-11-27, and so are its releases. Anything the plugin
   downloads at runtime must come from public URLs.
 
@@ -266,15 +272,13 @@ There are no unit tests. Verify with:
 - State the cost (CPU/RAM/disk/complexity) of every proposed change; tiny costs only.
 - Use plain words in the UI and in explanations: "seconds", not "s". Explain audio and
   Windows concepts simply; the owner is a musician first.
-- Work on a branch, commit, and push so CI builds it; the owner checks the Actions tab and
-  tests the artifact. Merge to `main` only when the owner says it works. Ask before pushing
+- Work on a branch and commit; build with `build.bat` on a PC that can, and the owner tests
+  the built plugin. Merge to `main` only when the owner says it works. Ask before pushing
   to a new branch or to `main`.
 - Commit messages: one short title line only. No body, no `Co-Authored-By` line, no
   "Generated with Claude Code". The same goes for pull request descriptions.
 - Finish with one clear "what to do now" step, in numbered clicks. Long option lists or
   several parallel next steps confuse the owner ("I didn't understand what to do now").
-- The owner can't share CI logs easily: ask them to click the red step and paste the lines
-  with `error` (there is no log-download button on the run summary page).
 
 ## Decisions already made (don't re-propose)
 
@@ -310,6 +314,8 @@ Stream buffer 20 ms, the two quality tests, MP3 320 stays, pile-up dropped at on
 The owner wrapped the plugin up: branch `small-ffmpeg` was merged into `main` (fast-forward)
 and released as **v0.3.0** (tag on the commit "Drop piled-up audio at once instead of
 draining it slowly"). CI builds the release zip and installer from the tag.
+The commit IDs below are from before 2026-11-27, when the owner rewrote the history to
+remove the `Co-Authored-By` lines; the same commits now have new IDs.
 
 | Commit | What | CI |
 |---|---|---|
@@ -331,7 +337,9 @@ pile-up jump. If something is wrong there, fix it on a branch and release v0.3.1
 
 If the owner comes back:
 
-1. If the v0.3.0 release build was red, get the error lines and fix.
+1. The v0.3.0 release exists with its zip and installer. A red v0.3.0 run on 2026-11-27
+   only said "a release with the same tag name already exists" (the tag was force-pushed
+   after the history rewrite); nothing to fix.
 2. The owner may report "Copy delay now: … (plugin … + Windows …, low-latency / normal
    mode)" from a real session. Whether VB-Cable supports low-latency mode is unknown.
 
