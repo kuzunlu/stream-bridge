@@ -122,6 +122,8 @@ runs the YouTube downloader without a DAW.
 
 ## Licences
 
-Stream Bridge is built with [JUCE](https://juce.com), which is licensed under AGPLv3 or a
-commercial JUCE licence. The bundled ffmpeg is FFmpeg with LAME, under the LGPL 2.1
+Stream Bridge is built with [JUCE](https://juce.com), used under the free JUCE Starter
+licence ([JUCE 9 EULA](https://juce.com/legal/juce-9-licence/)). The Stream Bridge source
+code is shared here to read only: all rights reserved, no licence to copy or reuse it is
+given. The bundled ffmpeg is FFmpeg with LAME, under the LGPL 2.1
 (see `ffmpeg-LICENSE.txt` and `ffmpeg-README.txt` inside the plugin).

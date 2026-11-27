@@ -231,8 +231,8 @@ Checked when an output is opened, when the editor opens, and on Refresh. Never p
   Actions are pinned by commit SHA with a version comment.
 - Release: `git tag vX.Y.Z && git push origin vX.Y.Z` → CI publishes the zip + installer.
   Never push a tag unless the owner asks.
-- The repo is **private**; release files can't be downloaded without access. Anything the
-  plugin downloads at runtime must come from public URLs.
+- The repo is **public** since 2026-11-27, and so are its releases. Anything the plugin
+  downloads at runtime must come from public URLs.
 
 ## Installer (installer/StreamBridge.iss)
 
@@ -368,6 +368,11 @@ Findings from 2026-11-17:
 
 ## Licensing
 
-JUCE is AGPLv3 or commercial. If the plugin is shared without its source, a commercial
-JUCE licence may be needed; the owner has been told. ffmpeg/LAME are LGPL 2.1 (notices ship
-in the bundle). VB-Cable is not redistributed, only linked.
+JUCE is used under the free **JUCE Starter** licence (JUCE 9 EULA, chosen 2026-11-27):
+allowed while yearly revenue or funding is up to $20,000, counting donations, ads and
+sponsorship. Above that, a paid JUCE licence is needed. The repo has no LICENSE file on
+purpose ("all rights reserved"): the EULA (section 2.3) forbids putting JUCE under an
+open-source licence that forces sharing the source or free redistribution, so don't add
+AGPL, GPL or MIT. Never copy JUCE's source into the repo; it stays a submodule of the
+official JUCE repo. ffmpeg/LAME are LGPL 2.1 (notices ship in the bundle). VB-Cable is not
+redistributed, only linked.
